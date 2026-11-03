@@ -1,0 +1,16 @@
+{
+  "id": "lythara-survey-sheet",
+  "title": "Lythara Survey Sheet",
+  "description": "Builds a detailed overland scene from a Survey Sheet: land from a seed and painted terrain, places as map notes, and a link for sending changes in and reading them back.",
+  "version": "0.1.0",
+  "compatibility": { "minimum": "14", "verified": "14.369" },
+  "authors": [{ "name": "Rhea and Claude" }],
+  "url": "https://github.com/bcw3075/lythara-survey-sheet",
+  "manifest": "https://github.com/bcw3075/lythara-survey-sheet/releases/latest/download/module.json",
+  "download": "https://github.com/bcw3075/lythara-survey-sheet/releases/download/v0.1.0/lythara-survey-sheet.zip",
+  "esmodules": ["scripts/main.mjs"],
+  "styles": ["styles/sheet.css"],
+  "relationships": {
+    "recommends": [{ "id": "more-pin-options", "type": "module", "reason": "Pin labels and shadows use its settings." }]
+  }
+}
