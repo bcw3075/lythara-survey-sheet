@@ -11,17 +11,19 @@ const FP = () => foundry.applications.apps.FilePicker.implementation;
 let busy = false;
 
 /* ---------- checking what comes in ---------- */
+/* Pin icons must be image files on this server, so pasted data can't make every player's browser load an outside address. */
+const safeIcon = v => typeof v === "string" && v.length <= 200 && /^[\w][\w\- .%/]*\.(svg|webp|png|jpe?g|avif|gif)$/i.test(v) && !v.includes("..") && !v.includes("//") ? v : null;
 function clean(data) {
   if (!data || typeof data !== "object") throw new Error("That isn't Survey Sheet data.");
   const seed = Number(data.seed);
   if (!Number.isInteger(seed)) throw new Error("The seed must be a whole number.");
   const paint = data.paint ?? "";
-  if (typeof paint !== "string" || !/^[\d,;-]*$/.test(paint)) throw new Error("The painted terrain data is damaged.");
+  if (typeof paint !== "string" || paint.length > 2000000 || !/^[\d,;-]*$/.test(paint)) throw new Error("The painted terrain data is damaged.");
   if (!Array.isArray(data.pins) || data.pins.length > 300) throw new Error("The pin list is missing or too long.");
   const pins = data.pins.map(p => {
     const x = Number(p.x), y = Number(p.y);
-    if (typeof p.id !== "string" || !/^[\w-]{1,60}$/.test(p.id) || !Number.isFinite(x) || !Number.isFinite(y)) throw new Error("A pin is damaged.");
-    return { id: p.id, name: String(p.name ?? "Unnamed pin").slice(0, 120), kind: KIND_ICON[p.kind] ? p.kind : "site", src: String(p.src ?? "").slice(0, 60), icon: typeof p.icon === "string" ? p.icon.slice(0, 200) : null, known: !!p.known, x, y };
+    if (typeof p.id !== "string" || !/^[\w-]{1,60}$/.test(p.id) || !Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > 1000 || Math.abs(y) > 1000) throw new Error("A pin is damaged.");
+    return { id: p.id, name: String(p.name ?? "Unnamed pin").slice(0, 120), kind: Object.hasOwn(KIND_ICON, p.kind) ? p.kind : "site", src: String(p.src ?? "").slice(0, 60), icon: safeIcon(p.icon), known: !!p.known, x, y };
   });
   return { seed, paint, pins, bake: { road: data.bake?.road !== false, creek: data.bake?.creek !== false } };
 }
@@ -112,6 +114,7 @@ export async function applySheet(raw, sceneArg) {
 }
 
 export function exportSheet(sceneArg) {
+  if (!game.user.isGM) throw new Error("Only a GM can read the sheet data.");
   const scene = sceneArg ?? game.scenes.find(s => s.getFlag(ID, "state"));
   if (!scene) throw new Error("No Survey Sheet scene exists yet.");
   const st = scene.getFlag(ID, "state");

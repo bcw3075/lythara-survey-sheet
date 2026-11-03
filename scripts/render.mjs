@@ -49,7 +49,7 @@ export function linesFor(seed) {
 
 export function decodePaint(text) {
   const paint = new Int8Array(GW * GH).fill(-1);
-  if (text) for (const r of text.split(";")) { const [a, n, v] = r.split(",").map(Number); paint.fill(v, a, a + n); }
+  if (text) for (const r of text.split(";")) { const [a, n, v] = r.split(",").map(Number); if (a >= 0 && n >= 0 && a + n <= paint.length && v >= 0 && v <= 7) paint.fill(v, a, a + n); }
   return paint;
 }
 
