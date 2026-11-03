@@ -134,14 +134,14 @@ function mountLink() {
   if (document.getElementById("lss-link")) return;
   const box = document.createElement("div");
   box.id = "lss-link";
-  box.innerHTML = `<textarea id="lss-in" aria-label="Survey sheet incoming data"></textarea><button type="button" id="lss-run">Run sheet link</button><output id="lss-out" aria-label="Survey sheet result">Ready</output>`;
+  box.innerHTML = `<textarea id="lss-in" aria-label="Survey sheet incoming data"></textarea><button type="button" id="lss-run">Run sheet link</button><div id="lss-out" role="status">LSS-RESULT Ready</div>`;
   document.body.append(box);
   const out = box.querySelector("#lss-out"), input = box.querySelector("#lss-in");
   box.querySelector("#lss-run").addEventListener("click", async () => {
-    out.textContent = "Working";
+    out.textContent = "LSS-RESULT Working";
     let req;
-    try { req = JSON.parse(input.value).req; out.textContent = JSON.stringify(await run(input.value)); }
-    catch (e) { out.textContent = JSON.stringify({ req, ok: false, error: e.message }); }
+    try { req = JSON.parse(input.value).req; out.textContent = "LSS-RESULT " + JSON.stringify(await run(input.value)); }
+    catch (e) { out.textContent = "LSS-RESULT " + JSON.stringify({ req, ok: false, error: e.message }); }
     input.value = "";
   });
 }
