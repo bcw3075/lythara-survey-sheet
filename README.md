@@ -7,6 +7,6 @@ A Foundry VTT v14 module that builds a detailed overland scene from a Survey She
 ## Install
 In Foundry, go to Add-on Modules, then Install Module, and paste this manifest URL:
 
-`https://github.com/bcw3075/lythara-survey-sheet/releases/latest/download/module.json`
+`https://raw.githubusercontent.com/bcw3075/lythara-survey-sheet/main/module.json`
 
 More Pin Options is recommended for pin labels and shadows.
