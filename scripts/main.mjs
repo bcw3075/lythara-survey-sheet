@@ -134,7 +134,7 @@ function mountLink() {
   if (document.getElementById("lss-link")) return;
   const box = document.createElement("div");
   box.id = "lss-link";
-  box.innerHTML = `<textarea id="lss-in" aria-label="Survey sheet incoming data"></textarea><button type="button" id="lss-run">Run sheet link</button><div id="lss-out" role="status"><div id="lss-head">LSS-RESULT Ready</div><div id="lss-parts"></div></div>`;
+  box.innerHTML = `<textarea id="lss-in" aria-label="Survey sheet incoming data"></textarea><button type="button" id="lss-run">Run sheet link</button><div id="lss-out" role="status"><div id="lss-head">LSS-RESULT Ready</div><div id="lss-parts" role="group" aria-label="LSS-PARTS"></div></div>`;
   document.body.append(box);
   const head = box.querySelector("#lss-head"), parts = box.querySelector("#lss-parts"), input = box.querySelector("#lss-in");
   const show = (req, obj) => {
