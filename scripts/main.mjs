@@ -134,14 +134,23 @@ function mountLink() {
   if (document.getElementById("lss-link")) return;
   const box = document.createElement("div");
   box.id = "lss-link";
-  box.innerHTML = `<textarea id="lss-in" aria-label="Survey sheet incoming data"></textarea><button type="button" id="lss-run">Run sheet link</button><div id="lss-out" role="status">LSS-RESULT Ready</div>`;
+  box.innerHTML = `<textarea id="lss-in" aria-label="Survey sheet incoming data"></textarea><button type="button" id="lss-run">Run sheet link</button><div id="lss-out" role="status"><div id="lss-head">LSS-RESULT Ready</div><div id="lss-parts"></div></div>`;
   document.body.append(box);
-  const out = box.querySelector("#lss-out"), input = box.querySelector("#lss-in");
+  const head = box.querySelector("#lss-head"), parts = box.querySelector("#lss-parts"), input = box.querySelector("#lss-in");
+  const show = (req, obj) => {
+    /* The app's page reader cuts long text, so the answer goes out as short base64 lines. */
+    const bytes = new TextEncoder().encode(JSON.stringify(obj));
+    let bin = ""; for (const b of bytes) bin += String.fromCharCode(b);
+    const b64 = btoa(bin), frag = document.createDocumentFragment();
+    for (let i = 0, n = 0; i < b64.length; i += 80, n++) { const d = document.createElement("div"); d.textContent = `L${n}:${b64.slice(i, i + 80)}`; frag.append(d); }
+    parts.replaceChildren(frag);
+    head.textContent = `LSS-RESULT Done ${req ?? "none"}`;
+  };
   box.querySelector("#lss-run").addEventListener("click", async () => {
-    out.textContent = "LSS-RESULT Working";
+    head.textContent = "LSS-RESULT Working"; parts.replaceChildren();
     let req;
-    try { req = JSON.parse(input.value).req; out.textContent = "LSS-RESULT " + JSON.stringify(await run(input.value)); }
-    catch (e) { out.textContent = "LSS-RESULT " + JSON.stringify({ req, ok: false, error: e.message }); }
+    try { req = JSON.parse(input.value).req; show(req, await run(input.value)); }
+    catch (e) { show(req, { req, ok: false, error: e.message }); }
     input.value = "";
   });
 }
