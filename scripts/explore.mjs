@@ -94,7 +94,11 @@ export async function restoreScene(scene) {
     const old = await imageOf(own); if (old) oc.drawImage(old, 0, 0, W, H);
     oc.drawImage(cv, 0, 0);
     const data = { explored: out.toDataURL("image/png"), timestamp: Date.now() };
-    if (own) await own.update(data); else await F().create({ scene: scene.id, level, user: user.id, ...data });
+    if (own) {
+      /* records fetched by query aren't in the client collection unless this GM has viewed the scene, and update() refuses a document it can't find there */
+      const coll = game.collections.get("FogExploration"); if (!coll.has(own.id)) coll.set(own.id, own);
+      await own.update(data);
+    } else await F().create({ scene: scene.id, level, user: user.id, ...data });
     const h = (s.harvested[scene.id] ??= {}); h[user.id] = data.timestamp;
   }
   await saveStore(s);

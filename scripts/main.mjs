@@ -300,7 +300,9 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
     on('[data-do="survey"]', () => run(async () => { const m = await surveyWorldMap(canvas.scene, f => status(`Surveying… ${Math.round(f * 100)}%`)); return `Surveyed ${m.w} by ${m.h} miles.`; }, true));
     on('[data-do="make"]', () => run(async () => {
       const r = await createSheet({ hexes: [...picked.values()], name: result.querySelector("#lss-name").value });
-      picked.clear(); drawPicked(); return `Made ${r.name}.`;
+      picked.clear(); drawPicked();
+      if (ui.controls.tool?.name === "pickHexes") ui.controls.activate({ control: "notes", tool: "select" });   /* leave the pick tool so pins can be dragged again */
+      return `Made ${r.name}.`;
     }, true));
     on('[data-do="refresh"]', () => run(async () => { const r = await renderSheet(canvas.scene, { force: true }); return `Redrawn (${Math.round((r.map.bytes || 0) / 1024)} KB).`; }));
     on('[data-do="refreshAll"]', () => run(async () => { let n = 0; for (const s of sheetScenes()) { await renderSheet(s); n++; } return `Checked ${n} sheet${n === 1 ? "" : "s"}.`; }));
@@ -317,6 +319,9 @@ function drawHexLines(zoom, state) {
   /* Drawn below the fog of war, so unexplored land still hides the road and creek. */
   const parent = canvas.environment ?? canvas.interface;
   if (!hexLines || hexLines.destroyed || hexLines.parent !== parent) { hexLines = new PIXI.Graphics(); parent.addChild(hexLines); }
+  /* lines run on across the world, so stop them at the map's edge */
+  const r = canvas.dimensions.sceneRect; if (hexLines.mask && !hexLines.mask.destroyed) hexLines.mask.destroy();
+  hexLines.mask = parent.addChild(new PIXI.Graphics().beginFill(0xffffff).drawRect(r.x, r.y, r.width, r.height).endFill());
   const w = world(), lk = JSON.stringify([w.seed, w.lines]);
   if (lineCache?.key !== lk) lineCache = { key: lk, courses: w.lines.map(l => ({ kind: l.kind, course: lineCourse(l, w.seed) })) };
   const trace = pts => pts.forEach((pt, i) => { const p = toScene(canvas.scene, pt.x, pt.y); i ? hexLines.lineTo(p.x, p.y) : hexLines.moveTo(p.x, p.y); });
