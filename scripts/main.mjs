@@ -184,6 +184,35 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
   }
 }
 
+/* ---------- pins keep one screen size, and crowded minor pins wait until you zoom in ---------- */
+const PIN_PX = 34, LABEL_PX = 13, RANK = { village: 0, gate: 1, ruin: 2, camp: 3, site: 4 };
+function layoutPins() {
+  if (!canvas?.ready || !canvas.scene?.getFlag(ID, "state")) return;
+  const kinds = Object.fromEntries((canvas.scene.getFlag(ID, "state").pins ?? []).map(p => [p.id, p.kind]));
+  const rank = n => RANK[kinds[n.document.getFlag(ID, "pinId")]] ?? 5;
+  const zoom = canvas.stage.scale.x, kept = [];
+  const notes = canvas.notes.placeables.filter(n => n.document.getFlag(ID, "pinId") && n.isVisible && n.controlIcon);
+  for (const n of notes.sort((a, b) => rank(a) - rank(b))) {
+    const d = n.document, t = n.tooltip;
+    n.controlIcon.scale.set(PIN_PX / (d.iconSize * zoom));
+    if (t) { t.scale.set(LABEL_PX / (d.fontSize * zoom)); t.position.set(0, (PIN_PX / 2 + 2) / zoom); }
+    const p = canvas.stage.worldTransform.apply({ x: d.x, y: d.y }), w = Math.max(PIN_PX, d.text.length * 7);
+    const box = { x: p.x - w / 2, y: p.y - PIN_PX / 2, w, h: PIN_PX + LABEL_PX + 4 };
+    const crowded = kept.some(o => box.x < o.x + o.w && o.x < box.x + box.w && box.y < o.y + o.h && o.y < box.y + box.h);
+    const show = !crowded || n.hover;
+    n.controlIcon.visible = show;
+    if (t) t.visible = show;
+    if (show) kept.push(box);
+  }
+}
+let layoutQueued = false;
+function queueLayout() {
+  if (layoutQueued) return;
+  layoutQueued = true;
+  requestAnimationFrame(() => { layoutQueued = false; layoutPins(); });
+}
+for (const hook of ["canvasReady", "canvasPan", "drawNote", "refreshNote", "createNote", "updateNote", "deleteNote"]) Hooks.on(hook, queueLayout);
+
 /* ---------- start ---------- */
 Hooks.once("init", () => {
   game.settings.register(ID, "showLink", { name: "Show the sheet link", hint: "Shows the small link bar the Survey Sheet uses in the Claude app. Leave it off in your normal browser.", scope: "client", config: true, type: Boolean, default: false, requiresReload: true });
