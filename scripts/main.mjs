@@ -1,9 +1,10 @@
-import { MAP, renderMap } from "./render.mjs";
+import { HEXES, HEX_RADIUS, MAP, renderMap } from "./render.mjs";
 
 const ID = "lythara-survey-sheet";
 const IMAGE_DIR = "assets/map-tools";
 const PIN_FOLDER = "Survey Sheet Pins";
 const KIND_ICON = { village: "icons/svg/village.svg", camp: `modules/${ID}/icons/camp.svg`, ruin: `modules/${ID}/icons/ruin.svg`, gate: `modules/${ID}/icons/gate.svg`, site: `modules/${ID}/icons/site.svg` };
+const RENDER_VERSION = 2;
 const PIN_STYLE = { hasBackground: false, alwaysShowTooltip: true, dropShadowEnabled: true, dropShadowColor: "#000000", dropShadowAlpha: 0.8, dropShadowDistance: 0, dropShadowBlur: 2, dropShadowAngle: 0, strokeColor: "#000000", strokeAlpha: 1, strokeThickness: 4 };
 
 const FP = () => foundry.applications.apps.FilePicker.implementation;
@@ -101,11 +102,11 @@ export async function applySheet(raw, sceneArg) {
     const scene = sceneArg ?? game.scenes.find(s => s.getFlag(ID, "state")) ?? await createScene();
     const before = scene.getFlag(ID, "state");
     const rev = foundry.utils.randomID(8);
-    const landKey = JSON.stringify([data.seed, data.paint, data.bake]);
-    const sameLand = before && JSON.stringify([before.seed, before.paint, before.bake]) === landKey;
+    const landKey = JSON.stringify([RENDER_VERSION, data.seed, data.paint, data.bake]);
+    const sameLand = before && JSON.stringify([before.renderVersion, before.seed, before.paint, before.bake]) === landKey;
     const map = sameLand ? { fingerprint: before.fingerprint, skipped: true } : await uploadMap(scene, data, rev);
     const pins = await syncPins(scene, data.pins);
-    await scene.setFlag(ID, "state", { seed: data.seed, paint: data.paint, bake: data.bake, rev, fingerprint: map.fingerprint, pins: data.pins.map(({ id, src, kind, icon }) => ({ id, src, kind, icon })) });
+    await scene.setFlag(ID, "state", { renderVersion: RENDER_VERSION, seed: data.seed, paint: data.paint, bake: data.bake, rev, fingerprint: map.fingerprint, pins: data.pins.map(({ id, src, kind, icon }) => ({ id, src, kind, icon })) });
     return { ok: true, scene: scene.id, name: scene.name, rev, map, pins };
   } finally { busy = false; }
 }
@@ -186,8 +187,22 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
 
 /* ---------- pins keep one screen size, and crowded minor pins wait until you zoom in ---------- */
 const PIN_PX = 48, LABEL_PX = 15, RANK = { village: 0, gate: 1, ruin: 2, camp: 3, site: 4 };
+let hexLines = null;
+function drawHexLines(zoom) {
+  if (!hexLines || hexLines.destroyed || !hexLines.parent) { hexLines = new PIXI.Graphics(); canvas.interface.addChild(hexLines); }
+  hexLines.clear();
+  hexLines.lineStyle(1.5 / zoom, 0x1f2a24, 0.85);
+  for (const H of HEXES) {
+    for (let i = 0; i <= 6; i++) {
+      const a = Math.PI / 180 * (60 * i + 30), p = toScene(canvas.scene, H.cx + Math.cos(a) * HEX_RADIUS, H.cy + Math.sin(a) * HEX_RADIUS);
+      i ? hexLines.lineTo(p.x, p.y) : hexLines.moveTo(p.x, p.y);
+    }
+  }
+}
 function layoutPins() {
-  if (!canvas?.ready || !canvas.scene?.getFlag(ID, "state")) return;
+  if (!canvas?.ready) return;
+  if (!canvas.scene?.getFlag(ID, "state")) { if (hexLines && !hexLines.destroyed) hexLines.clear(); return; }
+  drawHexLines(canvas.stage.scale.x);
   const kinds = Object.fromEntries((canvas.scene.getFlag(ID, "state").pins ?? []).map(p => [p.id, p.kind]));
   const rank = n => RANK[kinds[n.document.getFlag(ID, "pinId")]] ?? 5;
   const zoom = canvas.stage.scale.x, kept = [];
