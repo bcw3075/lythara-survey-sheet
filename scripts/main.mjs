@@ -3,7 +3,7 @@ import { MAP, renderMap } from "./render.mjs";
 const ID = "lythara-survey-sheet";
 const IMAGE_DIR = "assets/map-tools";
 const PIN_FOLDER = "Survey Sheet Pins";
-const KIND_ICON = { village: "icons/svg/village.svg", camp: "icons/svg/fire.svg", ruin: "icons/svg/ruins.svg", gate: "icons/svg/ruins.svg", site: "icons/svg/skull.svg" };
+const KIND_ICON = { village: "icons/svg/village.svg", camp: `modules/${ID}/icons/camp.svg`, ruin: `modules/${ID}/icons/ruin.svg`, gate: `modules/${ID}/icons/gate.svg`, site: `modules/${ID}/icons/site.svg` };
 const PIN_STYLE = { hasBackground: false, alwaysShowTooltip: true, dropShadowEnabled: true, dropShadowColor: "#000000", dropShadowAlpha: 0.8, dropShadowDistance: 0, dropShadowBlur: 2, dropShadowAngle: 0, strokeColor: "#000000", strokeAlpha: 1, strokeThickness: 4 };
 
 const FP = () => foundry.applications.apps.FilePicker.implementation;
@@ -76,7 +76,7 @@ async function syncPins(scene, pins) {
       const movedHere = last && (Math.abs(note.x - last.x) > 1 || Math.abs(note.y - last.y) > 1);
       if (movedHere) keptMoves.push(p.id);
       const pos = movedHere ? { x: note.x, y: note.y } : at;
-      updates.push({ _id: note.id, ...pos, text: p.name, [`flags.${ID}.last`]: pos });
+      updates.push({ _id: note.id, ...pos, text: p.name, "texture.src": p.icon || KIND_ICON[p.kind], [`flags.${ID}.last`]: pos });
       if (note.entry?.getFlag(ID, "managed")) await note.entry.update({ name: p.name, "ownership.default": p.known ? 1 : 0 });
     } else {
       const entry = await JournalEntry.create({ name: p.name, folder: folder.id, ownership: { default: p.known ? 1 : 0 }, flags: { [ID]: { managed: true } }, pages: [{ name: p.name, type: "text", text: { content: "", format: 1 } }] });
@@ -185,7 +185,7 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
 }
 
 /* ---------- pins keep one screen size, and crowded minor pins wait until you zoom in ---------- */
-const PIN_PX = 34, LABEL_PX = 13, RANK = { village: 0, gate: 1, ruin: 2, camp: 3, site: 4 };
+const PIN_PX = 48, LABEL_PX = 15, RANK = { village: 0, gate: 1, ruin: 2, camp: 3, site: 4 };
 function layoutPins() {
   if (!canvas?.ready || !canvas.scene?.getFlag(ID, "state")) return;
   const kinds = Object.fromEntries((canvas.scene.getFlag(ID, "state").pins ?? []).map(p => [p.id, p.kind]));
@@ -196,7 +196,7 @@ function layoutPins() {
     const d = n.document, t = n.tooltip;
     n.controlIcon.scale.set(PIN_PX / (d.iconSize * zoom));
     if (t) { t.scale.set(LABEL_PX / (d.fontSize * zoom)); t.position.set(0, (PIN_PX / 2 + 2) / zoom); }
-    const p = canvas.stage.worldTransform.apply({ x: d.x, y: d.y }), w = Math.max(PIN_PX, d.text.length * 7);
+    const p = canvas.stage.worldTransform.apply({ x: d.x, y: d.y }), w = Math.max(PIN_PX, d.text.length * 8);
     const box = { x: p.x - w / 2, y: p.y - PIN_PX / 2, w, h: PIN_PX + LABEL_PX + 4 };
     const crowded = kept.some(o => box.x < o.x + o.w && o.x < box.x + box.w && box.y < o.y + o.h && o.y < box.y + box.h);
     const show = !crowded || n.hover;
