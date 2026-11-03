@@ -1,6 +1,7 @@
 import { PPM, renderMap } from "./render.mjs";
 import { CELL, lineCourse } from "./land.mjs";
 import { classifyImage, surveyToPng, surveyFromPng, surveySlice, SURVEY_FILE, SURVEY_VERSION } from "./survey.mjs";
+import { harvestScene, restoreScene, syncExploration, exploredArea } from "./explore.mjs";
 
 const ID = "lythara-survey-sheet";
 const IMAGE_DIR = "assets/map-tools";
@@ -130,7 +131,10 @@ export async function createSheet({ hexes, name, margin = MARGIN, link = true } 
   });
   const r = await renderSheet(scene, { force: true });
   if (link && g.meta.sceneId) await linkOnMap(scene, frame, g);
-  return { ok: true, scene: scene.id, name: scene.name, frame, ...r };
+  /* the party arrives with the land it has already walked revealed */
+  let explored = 0;
+  try { await syncExploration({ restore: false }); explored = await restoreScene(scene); } catch (e) { console.warn(`${ID} | exploration not carried over`, e); }
+  return { ok: true, scene: scene.id, name: scene.name, frame, explored, ...r };
 }
 /** A pin on the World Map that opens the sheet. */
 async function linkOnMap(scene, frame, g) {
@@ -226,7 +230,8 @@ export function exportSheet(sceneArg) {
   const scene = sceneArg ?? (canvas.scene?.getFlag(ID, "state")?.frame ? canvas.scene : sheetScenes()[0]);
   if (!scene) throw new Error("No sheet exists yet.");
   const st = scene.getFlag(ID, "state"), w = world();
-  return { ok: true, scene: scene.id, name: scene.name, frame: st.frame, hexes: st.hexes, slice: { ...st.sliceBox, data: st.slice }, seed: w.seed, paint: w.paint, lines: w.lines, pins: w.pins, rev: st.rev, fingerprint: st.fingerprint };
+  const meta = survey(), hexR = meta ? +(new foundry.grid.HexagonalGrid(meta.grid).sizeY / 2 / meta.pxPerMile).toFixed(4) : undefined;
+  return { ok: true, scene: scene.id, name: scene.name, frame: st.frame, hexes: st.hexes, hexR, slice: { ...st.sliceBox, data: st.slice }, seed: w.seed, paint: w.paint, lines: w.lines, pins: w.pins, rev: st.rev, fingerprint: st.fingerprint };
 }
 
 /* ---------- picking hexes on the World Map ---------- */
@@ -274,6 +279,8 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
       </section>
       <section><h3>This sheet</h3>
         <div class="lss-row"><button type="button" data-do="refresh" ${isSheet ? "" : "disabled"}>Redraw this sheet</button><button type="button" data-do="refreshAll">Redraw all sheets</button></div>
+        <p>The party has seen about ${exploredArea()} square miles. Carrying exploration reads what the players' characters have revealed on every sheet, then shows it on every sheet and the World Map.</p>
+        <div class="lss-row"><button type="button" data-do="explore">Carry exploration everywhere</button></div>
         <p>Paste data copied from the Survey Sheet, then apply it. Copy current sheet gives you data to paste back into the sheet.</p>
         <textarea id="lss-paste" aria-label="Survey Sheet data"></textarea>
         <div class="lss-row"><button type="button" data-do="apply">Apply to map</button><button type="button" data-do="copy" ${isSheet ? "" : "disabled"}>Copy current sheet</button></div>
@@ -297,6 +304,7 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
     }, true));
     on('[data-do="refresh"]', () => run(async () => { const r = await renderSheet(canvas.scene, { force: true }); return `Redrawn (${Math.round((r.map.bytes || 0) / 1024)} KB).`; }));
     on('[data-do="refreshAll"]', () => run(async () => { let n = 0; for (const s of sheetScenes()) { await renderSheet(s); n++; } return `Checked ${n} sheet${n === 1 ? "" : "s"}.`; }));
+    on('[data-do="explore"]', () => run(async () => { const r = await syncExploration(); return `Read ${r.harvested} changed area${r.harvested === 1 ? "" : "s"}; revealed on ${r.restored.filter(x => x[1]).length} scene${r.restored.filter(x => x[1]).length === 1 ? "" : "s"}.`; }, true));
     on('[data-do="apply"]', () => run(async () => { const r = await applySheet(JSON.parse(result.querySelector("#lss-paste").value)); return `Updated ${r.sheets.length} sheet${r.sheets.length === 1 ? "" : "s"}.`; }));
     on('[data-do="copy"]', () => run(async () => { const t = JSON.stringify(exportSheet(canvas.scene)); const area = result.querySelector("#lss-paste"); area.value = t; area.select(); await navigator.clipboard?.writeText(t); return "Copied. If pasting doesn't work, copy the text in the box."; }));
   }
@@ -359,6 +367,7 @@ for (const hook of ["canvasReady", "canvasPan", "drawNote", "refreshNote", "crea
 Hooks.once("init", () => {
   game.settings.register(ID, "world", { scope: "world", config: false, type: Object, default: WORLD_DEFAULT });
   game.settings.register(ID, "survey", { scope: "world", config: false, type: Object, default: null });
+  game.settings.register(ID, "explored", { scope: "world", config: false, type: Object, default: { version: 1, chunks: {}, harvested: {} } });
 });
 Hooks.on("getSceneControlButtons", controls => {
   if (!game.user.isGM || !controls.notes?.tools) return;
@@ -366,5 +375,7 @@ Hooks.on("getSceneControlButtons", controls => {
   controls.notes.tools.surveySheet = { name: "surveySheet", title: "Survey Sheet", icon: "fa-solid fa-map-location-dot", button: true, order: 99, onChange: () => new SheetPanel().render(true) };
 });
 Hooks.once("ready", () => {
-  game.modules.get(ID).api = { applySheet, exportSheet, createSheet, renderSheet, surveyWorldMap, setWorldOrigin, renderMap, world, picked, PPM, CELL };
+  game.modules.get(ID).api = { applySheet, exportSheet, createSheet, renderSheet, surveyWorldMap, setWorldOrigin, harvestScene, restoreScene, syncExploration, exploredArea, renderMap, world, picked, PPM, CELL };
+  /* the active GM quietly keeps the world record up to date from whatever sheet the party is on */
+  if (game.user.isGM) setInterval(() => { const s = game.scenes.active; if (s?.getFlag(ID, "state")?.frame && game.users.activeGM?.isSelf) harvestScene(s).catch(() => {}); }, 120000);
 });
