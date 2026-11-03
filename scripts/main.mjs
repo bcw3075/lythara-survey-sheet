@@ -4,7 +4,7 @@ const ID = "lythara-survey-sheet";
 const IMAGE_DIR = "assets/map-tools";
 const PIN_FOLDER = "Survey Sheet Pins";
 const KIND_ICON = { village: "icons/svg/village.svg", camp: `modules/${ID}/icons/camp.svg`, ruin: `modules/${ID}/icons/ruin.svg`, gate: `modules/${ID}/icons/gate.svg`, site: `modules/${ID}/icons/site.svg` };
-const RENDER_VERSION = 4;
+const RENDER_VERSION = 5;
 const PIN_STYLE = { hasBackground: false, alwaysShowTooltip: true, dropShadowEnabled: true, dropShadowColor: "#000000", dropShadowAlpha: 0.8, dropShadowDistance: 0, dropShadowBlur: 2, dropShadowAngle: 0, strokeColor: "#000000", strokeAlpha: 1, strokeThickness: 4 };
 
 const FP = () => foundry.applications.apps.FilePicker.implementation;
@@ -23,7 +23,7 @@ function clean(data) {
     if (typeof p.id !== "string" || !/^[\w-]{1,60}$/.test(p.id) || !Number.isFinite(x) || !Number.isFinite(y)) throw new Error("A pin is damaged.");
     return { id: p.id, name: String(p.name ?? "Unnamed pin").slice(0, 120), kind: KIND_ICON[p.kind] ? p.kind : "site", src: String(p.src ?? "").slice(0, 60), icon: typeof p.icon === "string" ? p.icon.slice(0, 200) : null, known: !!p.known, x, y };
   });
-  return { seed, paint, pins, bake: { road: data.bake?.road !== false, creek: !!data.bake?.creek } };
+  return { seed, paint, pins, bake: { road: data.bake?.road !== false, creek: data.bake?.creek !== false } };
 }
 
 /* ---------- position conversion ---------- */
@@ -47,7 +47,7 @@ export async function createScene(name = "Survey Sheet") {
 }
 
 async function uploadMap(scene, data, rev) {
-  const R = renderMap({ seed: data.seed, paint: data.paint, creek: data.bake.creek, road: data.bake.road });
+  const R = renderMap({ seed: data.seed, paint: data.paint });
   const blob = await new Promise(res => R.canvas.toBlob(res, "image/webp", 0.82));
   if (!blob) throw new Error("This browser couldn't make the map image.");
   try { await FP().createDirectory("data", IMAGE_DIR); } catch (e) { /* already there */ }
@@ -197,10 +197,13 @@ function drawHexLines(zoom, state) {
   hexLines.clear();
   if (state.bake?.creek) { hexLines.lineStyle(2.2 / zoom, 0x2f7ea6, 1); trace(lineCache.creek); }
   if (state.bake?.road !== false) { hexLines.lineStyle(2.2 / zoom, 0x6d5a44, 1); trace(lineCache.road); }
-  hexLines.lineStyle(1.5 / zoom, 0x1f2a24, 0.85);
-  for (const H of HEXES) {
-    const pts = []; for (let i = 0; i <= 6; i++) { const a = Math.PI / 180 * (60 * i + 30); pts.push({ x: H.cx + Math.cos(a) * HEX_RADIUS, y: H.cy + Math.sin(a) * HEX_RADIUS }); }
-    trace(pts);
+  /* A pale line under a dark one keeps the hex edges readable on both dark forest and pale pasture. */
+  for (const [width, color, alpha] of [[3.2, 0xf1e6c9, 0.45], [1.3, 0x1f2a24, 0.9]]) {
+    hexLines.lineStyle(width / zoom, color, alpha);
+    for (const H of HEXES) {
+      const pts = []; for (let i = 0; i <= 6; i++) { const a = Math.PI / 180 * (60 * i + 30); pts.push({ x: H.cx + Math.cos(a) * HEX_RADIUS, y: H.cy + Math.sin(a) * HEX_RADIUS }); }
+      trace(pts);
+    }
   }
 }
 function layoutPins() {

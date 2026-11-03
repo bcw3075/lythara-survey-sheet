@@ -2,7 +2,7 @@
   "id": "lythara-survey-sheet",
   "title": "Lythara Survey Sheet",
   "description": "Builds a detailed overland scene from a Survey Sheet: land from a seed and painted terrain, places as map notes, and a link for sending changes in and reading them back.",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "compatibility": {
     "minimum": "14",
     "verified": "14.369"
