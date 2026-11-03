@@ -41,6 +41,12 @@ function meander(pts, rough, depth, seed) {
   return cur;
 }
 
+/** The road and creek courses, drawn by the module at a constant screen width. */
+export function linesFor(seed) {
+  const s = seed | 0;
+  return { road: meander(ROAD, .06, 4, s + 83), creek: meander(CREEK, .2, 6, s + 71) };
+}
+
 export function decodePaint(text) {
   const paint = new Int8Array(GW * GH).fill(-1);
   if (text) for (const r of text.split(";")) { const [a, n, v] = r.split(",").map(Number); paint.fill(v, a, a + n); }
@@ -145,7 +151,5 @@ export function renderMap({ seed = 1147, paint = "", creek = false, road = true 
   const hexPath = H => { for (let i = 0; i < 6; i++) { const a = Math.PI / 180 * (60 * i + 30), px = X(H.cx + Math.cos(a) * HEX_R), py = Y(H.cy + Math.sin(a) * HEX_R); i ? c.lineTo(px, py) : c.moveTo(px, py); } c.closePath(); };
   c.beginPath(); c.rect(0, 0, w, h); HEXES.forEach(hexPath); c.fillStyle = "rgba(238,240,226,.66)"; c.fill("evenodd");
   const line = (pts, lw, col) => { c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(X(p.x), Y(p.y)) : c.moveTo(X(p.x), Y(p.y))); c.lineWidth = lw; c.strokeStyle = col; c.lineJoin = "round"; c.stroke(); };
-  if (road) line(B.road, ppm * .022, "#6d5a44");
-  if (creek) line(B.creek, ppm * .024, "#2f7ea6");
   return { canvas: cv, w, h, fingerprint: landFingerprint(B) };
 }

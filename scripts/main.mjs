@@ -1,10 +1,10 @@
-import { HEXES, HEX_RADIUS, MAP, renderMap } from "./render.mjs";
+import { HEXES, HEX_RADIUS, MAP, linesFor, renderMap } from "./render.mjs";
 
 const ID = "lythara-survey-sheet";
 const IMAGE_DIR = "assets/map-tools";
 const PIN_FOLDER = "Survey Sheet Pins";
 const KIND_ICON = { village: "icons/svg/village.svg", camp: `modules/${ID}/icons/camp.svg`, ruin: `modules/${ID}/icons/ruin.svg`, gate: `modules/${ID}/icons/gate.svg`, site: `modules/${ID}/icons/site.svg` };
-const RENDER_VERSION = 3;
+const RENDER_VERSION = 4;
 const PIN_STYLE = { hasBackground: false, alwaysShowTooltip: true, dropShadowEnabled: true, dropShadowColor: "#000000", dropShadowAlpha: 0.8, dropShadowDistance: 0, dropShadowBlur: 2, dropShadowAngle: 0, strokeColor: "#000000", strokeAlpha: 1, strokeThickness: 4 };
 
 const FP = () => foundry.applications.apps.FilePicker.implementation;
@@ -187,22 +187,26 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
 
 /* ---------- pins keep one screen size, and crowded minor pins wait until you zoom in ---------- */
 const PIN_PX = 48, LABEL_PX = 15, RANK = { village: 0, gate: 1, ruin: 2, camp: 3, site: 4 };
-let hexLines = null;
-function drawHexLines(zoom) {
-  if (!hexLines || hexLines.destroyed || !hexLines.parent) { hexLines = new PIXI.Graphics(); canvas.interface.addChild(hexLines); }
+let hexLines = null, lineCache = null;
+function drawHexLines(zoom, state) {
+  /* Drawn below the fog of war, so unexplored land still hides the road and creek. */
+  const parent = canvas.environment ?? canvas.interface;
+  if (!hexLines || hexLines.destroyed || hexLines.parent !== parent) { hexLines = new PIXI.Graphics(); parent.addChild(hexLines); }
+  if (lineCache?.seed !== state.seed) lineCache = { seed: state.seed, ...linesFor(state.seed) };
+  const trace = pts => pts.forEach((pt, i) => { const p = toScene(canvas.scene, pt.x, pt.y); i ? hexLines.lineTo(p.x, p.y) : hexLines.moveTo(p.x, p.y); });
   hexLines.clear();
+  if (state.bake?.creek) { hexLines.lineStyle(2.2 / zoom, 0x2f7ea6, 1); trace(lineCache.creek); }
+  if (state.bake?.road !== false) { hexLines.lineStyle(2.2 / zoom, 0x6d5a44, 1); trace(lineCache.road); }
   hexLines.lineStyle(1.5 / zoom, 0x1f2a24, 0.85);
   for (const H of HEXES) {
-    for (let i = 0; i <= 6; i++) {
-      const a = Math.PI / 180 * (60 * i + 30), p = toScene(canvas.scene, H.cx + Math.cos(a) * HEX_RADIUS, H.cy + Math.sin(a) * HEX_RADIUS);
-      i ? hexLines.lineTo(p.x, p.y) : hexLines.moveTo(p.x, p.y);
-    }
+    const pts = []; for (let i = 0; i <= 6; i++) { const a = Math.PI / 180 * (60 * i + 30); pts.push({ x: H.cx + Math.cos(a) * HEX_RADIUS, y: H.cy + Math.sin(a) * HEX_RADIUS }); }
+    trace(pts);
   }
 }
 function layoutPins() {
   if (!canvas?.ready) return;
   if (!canvas.scene?.getFlag(ID, "state")) { if (hexLines && !hexLines.destroyed) hexLines.clear(); return; }
-  drawHexLines(canvas.stage.scale.x);
+  drawHexLines(canvas.stage.scale.x, canvas.scene.getFlag(ID, "state"));
   const kinds = Object.fromEntries((canvas.scene.getFlag(ID, "state").pins ?? []).map(p => [p.id, p.kind]));
   const rank = n => RANK[kinds[n.document.getFlag(ID, "pinId")]] ?? 5;
   const zoom = canvas.stage.scale.x, kept = [];
