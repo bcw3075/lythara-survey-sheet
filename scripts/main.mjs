@@ -255,7 +255,9 @@ async function partyFollowMarker(marker, pos) {
   const target = here.find(s => members.some(m => m.s === s)) ?? here.find(s => s.active) ?? here.slice().sort((a, b) => near(a) - near(b))[0];
   const dest = toScene(target, w.x, w.y);
   /* members keep their offsets from the party token on their own sheet (or from their centre), measured before anything moves */
-  const groups = [...new Set(members.map(m => m.s))].map(s => { const toks = members.filter(m => m.s === s).map(m => m.t), anchor = s.tokens.find(t => t.actorId === party.id); return { s, toks, c: anchor ? tokenCentre(anchor) : centroid(toks), from: toks.map(t => tokenCentre(t)) }; });
+  /* a marker drag gathers the party: a member more than half a mile from the party token is pulled in to half a mile, same bearing */
+  const gather = (tc, c, s) => { const dx = tc.x - c.x, dy = tc.y - c.y, d = Math.hypot(dx, dy), lim = .5 * (s.grid.size ?? PPM); return d > lim ? { x: c.x + dx / d * lim, y: c.y + dy / d * lim } : tc; };
+  const groups = [...new Set(members.map(m => m.s))].map(s => { const toks = members.filter(m => m.s === s).map(m => m.t), anchor = s.tokens.find(t => t.actorId === party.id), c = anchor ? tokenCentre(anchor) : centroid(toks); return { s, toks, c, from: toks.map(t => gather(tokenCentre(t), c, s)) }; });
   /* party tokens: one on every covering sheet, none elsewhere */
   await syncPartyTokens(w, party);
   for (const { s, toks, c, from } of groups) {
