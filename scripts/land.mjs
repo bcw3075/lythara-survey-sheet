@@ -42,7 +42,7 @@ export function decodePaint(text) {
   for (const row of text.split(";")) {
     if (!row) continue;
     const [j, runs] = row.split(":"); const list = [];
-    for (const r of runs.split(",")) { const [i, n, v] = r.split("*").map(Number); if (Number.isInteger(i) && n > 0 && n < 1e6 && v >= 0 && v <= 7) list.push([i, n, v]); }
+    for (const r of runs.split(",")) { const [i, n, v] = r.split("*").map(Number); if (Number.isInteger(i) && n > 0 && n < 1e6 && v >= 0 && v <= 9) list.push([i, n, v]); }
     if (list.length) rows.set(+j, list);
   }
   return rows;

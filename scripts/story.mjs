@@ -5,8 +5,8 @@ import { CELL, hash, fbm } from "./land.mjs";
    forest age and edges decide them. The colours come from the World Map's canopy. */
 export const STORY_GROUND = ["#c6b670", "#b0ac62", "#747c44", "#48522e", "#8a965e", "#508696", "#b9ad7a", "#6e625c", "#8f8a7e", "#e6e8e4"];
 /* Art choices for rough country. hills: "marks" (small rock marks, the first version) | "hummocks" (sparse rounded hills) | "relief" (shading and contour lines only) | "both".
-   water: "plain" (flat colour with an edge line) | "shallows" (pale shallows, a sandy rim, wave marks). peaks: "classic" (storybook peaks with snow caps) | "shaded" (shaded rock with a few crags). */
-export const STYLE = { hills: "contours", water: "shallows", peaks: "classic" };
+   water: "plain" | "shallows" | "depth" (deeper blue away from shore, with depth bands) | "ripples" | "hatch" | "paper". peaks: "classic" | "shaded" | "none" (contours only). */
+export const STYLE = { hills: "contours", water: "depth", peaks: "none" };
 /* hills also: "contours" (hillshade + contour lines every 100 ft, labelled every 500 ft, on open and rough ground) | "tinted" (contours plus colour by height on rough ground).
    peaks also: "none". water also: "ripples" (shore lines echoing out), "depth" (bands darkening offshore), "hatch" (ink hatching along the shore), "paper" (bare paper with an inked edge and ripples).
    Elevation is invented but fixed: 2,400 ft at the highest point a sheet can reach; contour values read from that. */
