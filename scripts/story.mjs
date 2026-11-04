@@ -3,11 +3,15 @@ import { CELL, hash, fbm } from "./land.mjs";
 /* ---------- storybook trees: same code in the module and the Survey Sheet ----------
    Tree types are a best guess from real temperate woods: terrain, ground height, wetness,
    forest age and edges decide them. The colours come from the World Map's canopy. */
-export const STORY_GROUND = ["#c6b670", "#b0ac62", "#747c44", "#48522e", "#8a965e", "#508696", "#beac82", "#6e625c"];
+export const STORY_GROUND = ["#c6b670", "#b0ac62", "#747c44", "#48522e", "#8a965e", "#508696", "#b9ad7a", "#6e625c", "#8f8a7e", "#e6e8e4"];
+/* Art choices for rough country. hills: "marks" (small rock marks, the first version) | "hummocks" (sparse rounded hills) | "relief" (shading and contour lines only) | "both".
+   water: "plain" (flat colour with an edge line) | "shallows" (pale shallows, a sandy rim, wave marks). peaks: "classic" (storybook peaks with snow caps) | "shaded" (shaded rock with a few crags). */
+export const STYLE = { hills: "hummocks", water: "shallows", peaks: "classic" };
 const STORY_HOLLOW = .41, STORY_RIDGE = .64;
 export function makeStory(land) {
   const { tAt, elevAt } = land, creekPts = land.waterPoints, seed = land.s, GW = land.gw, GH = land.gh, i0 = land.i0, j1 = land.j1;
   const P = { oak: ["#616531", "#717436", "#535a2d", "#6a6e33"], old: ["#3c4324", "#474e2d", "#303623"], beech: ["#94993f", "#838a41", "#a8ad48"], birch: ["#b0b54e", "#a8ad48", "#bdbf5a"], hemlock: ["#2f4232", "#36493a", "#2a3b2e"], pine: ["#465a2e", "#506433", "#3e5230"], willow: ["#8d9a58", "#7c8e55", "#9aa562"] };
+  const style = { ...STYLE, ...(land.style ?? {}) };
   const INKT = "#20190f", s0 = seed | 0, near = new Float32Array(GW * GH).fill(9), rr = Math.ceil(.32 / CELL);
   for (const p of creekPts) {
     const ci = Math.floor(p.x / CELL) - i0, cj = j1 - 1 - Math.floor(p.y / CELL);
@@ -21,6 +25,7 @@ export function makeStory(land) {
     const k = Math.round(x * 97), m = Math.round(y * 97), h = hash(k, m, 31), h2 = hash(k, m, 32), h3 = hash(k, m, 33), pick = (kind, pal) => ({ kind, col: P[pal || kind][(h3 * P[pal || kind].length) | 0] });
     if (t === 4) { if (h < .25) return null; return h < .78 ? pick("willow") : pick("birch"); }
     if (open(t)) { if (isEdge(x, y) && h < .1) return pick("birch"); if (creekDist(x, y) < .2 && h < .18) return pick("willow"); if (t === 1 && h < .012) return pick("oakS", "oak"); return null; }
+    if (t === 6) { if (isEdge(x, y) && h < .12) return pick("birch"); if (h < .03) return elevAt(x, y) > .5 ? pick("pine") : pick("oakS", "oak"); return null; }
     if (!forest(t)) return null;
     if (creekDist(x, y) < .3 && h < .55) return pick("willow");
     if (t === 2 && h2 < .3) return null;
@@ -67,8 +72,36 @@ export function makeStory(land) {
     else if (t === 4 && r3 < .3) reeds(c, px, py, k);
     else if (open(t) && isEdge(wx, wy) && r3 < .34) scrub(c, px, py, k, P.oak[(r4 * 4) | 0]);
     else if (t === 1 && r3 < .05) scrub(c, px, py, k, P.oak[(r4 * 4) | 0]);
-    else if (t === 6 && r3 < .5) { const q = 9 * K; c.fillStyle = "#d8c9a3"; c.strokeStyle = "#4d4231"; c.lineWidth = LW; c.beginPath(); c.moveTo(px - q, py + q * .6); c.lineTo(px, py - q * .7); c.lineTo(px + q, py + q * .6); c.closePath(); c.fill(); c.stroke(); }
+    else if (t === 6 && r3 < .16 && (style.hills === "marks" || style.hills === "both")) { const q = 9 * K; c.fillStyle = "#d8c9a3"; c.strokeStyle = "#4d4231"; c.lineWidth = LW; c.beginPath(); c.moveTo(px - q, py + q * .6); c.lineTo(px, py - q * .7); c.lineTo(px + q, py + q * .6); c.closePath(); c.fill(); c.stroke(); }
+    else if (t === 6 && r3 < .07) { c.strokeStyle = "rgba(80,66,40,.45)"; c.lineWidth = 1.1 * LW; c.beginPath(); c.moveTo(px - 5 * K, py); c.lineTo(px + 5 * K, py - K); c.stroke(); }
+    else if (t === 5 && style.water === "shallows" && r3 < .07 && land.wetAt(wx, wy) > .72) { const q = 5 * K; c.strokeStyle = "rgba(220,236,240,.55)"; c.lineWidth = 1.2 * LW; c.beginPath(); c.moveTo(px - 2 * q, py); c.quadraticCurveTo(px - q, py - q * .7, px, py); c.quadraticCurveTo(px + q, py + q * .7, px + 2 * q, py); c.stroke(); }
+    else if (t === 8 && style.peaks === "shaded" && r3 < .18) { const q = 7 * K; c.strokeStyle = "#3a3632"; c.lineWidth = 1.2 * LW; c.beginPath(); c.moveTo(px - q, py + q * .5); c.lineTo(px - q * .3, py - q * .6); c.lineTo(px + q * .2, py + q * .1); c.lineTo(px + q, py - q * .4); c.stroke(); }
     else if (t === 7 && r3 < .4) { const q = 8 * K; c.strokeStyle = "#2d262a"; c.lineWidth = 1.2 * LW; c.beginPath(); c.moveTo(px, py + q); c.lineTo(px, py - q); c.moveTo(px, py - q * .2); c.lineTo(px - q * .6, py - q * .7); c.moveTo(px, py); c.lineTo(px + q * .6, py - q * .6); c.stroke(); }
+  }
+  /* Rounded hills, drawn far apart on hill country: an outline with a shaded flank, like a child's drawing of a hill. */
+  function hummock(c, px, py, k, r3, r4) {
+    const W = (46 + r3 * 30) * k, H = W * (.3 + r4 * .12);
+    c.strokeStyle = "#564a36"; c.lineWidth = 1.3 * LW; c.fillStyle = "#c9bd8c";
+    c.beginPath(); c.moveTo(px - W, py); c.quadraticCurveTo(px - W * .5, py - H * 1.9, px + W * .08, py - H * .4); c.quadraticCurveTo(px + W * .55, py - H * 1.15, px + W, py); c.fill(); c.stroke();
+    c.strokeStyle = "rgba(86,74,54,.6)"; c.lineWidth = LW; c.beginPath();
+    for (let i = 1; i <= 5; i++) { const a = px + W * (.1 + i * .15), b = py - H * (1.05 - i * .19); c.moveTo(a, b); c.lineTo(a + W * .09, py - 1); }
+    c.stroke();
+  }
+  /* Storybook mountains: a jagged peak with a dark flank, a white cap on snow country. */
+  function peak(c, px, py, k, r3, r4, snowy, scale = 1) {
+    const W = (46 + r3 * 40) * k * scale, H = W * (.85 + r4 * .55);
+    const R = [[-1, 0], [-.58, -.5], [-.34, -.38], [0, -1], [.2, -.66], [.38, -.78], [.66, -.36], [1, 0]].map(([a, b]) => [px + a * W, py + b * H]);
+    c.strokeStyle = "#2d2925"; c.lineWidth = 1.5 * LW; c.lineJoin = "round";
+    c.fillStyle = "#a8a39a"; c.beginPath(); R.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.closePath(); c.fill(); c.stroke();
+    /* the flank away from the light */
+    c.fillStyle = "rgba(58,52,48,.5)"; c.beginPath(); c.moveTo(R[3][0], R[3][1]); c.lineTo(px + .14 * W, py); c.lineTo(px + W, py); for (let i = 6; i >= 4; i--) c.lineTo(R[i][0], R[i][1]); c.closePath(); c.fill();
+    c.strokeStyle = "rgba(45,41,37,.55)"; c.lineWidth = .9 * LW; c.beginPath(); for (let i = 1; i <= 3; i++) { c.moveTo(R[3][0] + i * W * .06, R[3][1] + i * H * .2); c.lineTo(R[3][0] + i * W * .2, R[3][1] + i * H * .27); } c.stroke();
+    if (snowy) {
+      const cap = [[0, -1], [.14, -.77], [.09, -.68], [.03, -.72], [-.03, -.64], [-.1, -.7], [-.16, -.62], [-.24, -.68], [-.3, -.6], [-.2, -.72], [-.26, -.67]].map(([a, b]) => [px + a * W, py + b * H]);
+      c.fillStyle = "#f4f5f2"; c.strokeStyle = "#2d2925"; c.lineWidth = 1.1 * LW; c.beginPath(); c.moveTo(R[3][0], R[3][1]); c.lineTo(cap[1][0], cap[1][1]); for (let i = 2; i < 9; i++) c.lineTo(cap[i][0], cap[i][1]); c.lineTo(R[2][0] + .02 * W, R[2][1]); c.closePath(); c.fill(); c.stroke();
+      c.fillStyle = "rgba(120,124,128,.35)"; c.beginPath(); c.moveTo(R[3][0], R[3][1]); c.lineTo(cap[1][0], cap[1][1]); c.lineTo(cap[2][0], cap[2][1]); c.lineTo(px + .02 * W, py - .7 * H); c.closePath(); c.fill();
+      c.fillStyle = "#eceeea"; c.beginPath(); c.moveTo(R[5][0], R[5][1]); c.lineTo(px + .5 * W, py - .58 * H); c.lineTo(px + .4 * W, py - .62 * H); c.lineTo(px + .3 * W, py - .55 * H); c.lineTo(px + .26 * W, py - .62 * H); c.closePath(); c.fill(); c.stroke();
+    }
   }
   /* Draw every tree in a view. sp is grid spacing in miles; K scales the art. Trees keep fixed places on the land. */
   function draw(c, V, sp, K, lw) {
@@ -82,6 +115,12 @@ export function makeStory(land) {
       }
     };
     grid(sp * .64, 20, (wx, wy, t, px, py, r3, r4) => understory(c, wx, wy, t, px, py, r3, r4, K));
+    if (style.hills === "hummocks" || style.hills === "both") grid(sp * 2.8, 40, (wx, wy, t, px, py, r3, r4) => { if (t === 6 && r3 < .75 && tAt(wx - .35, wy) === 6 && tAt(wx + .35, wy) === 6) hummock(c, px, py, K, r3, r4); });
+    if (style.peaks === "classic") {
+      const mtn = t => t === 8 || t === 9;
+      grid(sp * 2.4, 80, (wx, wy, t, px, py, r3, r4) => { if (mtn(t) && r3 < .22) peak(c, px, py, K, r3 * 4, r4, t === 9 || elevAt(wx, wy) > .88, .5); });
+      grid(sp * 4.4, 60, (wx, wy, t, px, py, r3, r4) => { if (mtn(t) && r3 < .9 && mtn(tAt(wx - .4, wy)) && mtn(tAt(wx + .4, wy))) peak(c, px, py, K, r3, r4, t === 9 || elevAt(wx, wy) > .88); });
+    }
     grid(sp, 0, (wx, wy, t, px, py, r3) => { const s = speciesAt(wx, wy, t); if (s) TREE[s.kind](c, px, py, K * (.86 + r3 * .32), s.col); });
   }
   return { draw, speciesAt };

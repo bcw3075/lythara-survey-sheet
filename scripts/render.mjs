@@ -1,6 +1,6 @@
 /* Draws a sheet's land into a canvas for Foundry. The sheet artifact draws the same land with the same code. */
 import { CELL, buildLand, landFingerprint } from "./land.mjs";
-import { STORY_GROUND, makeStory } from "./story.mjs";
+import { STORY_GROUND, STYLE, makeStory } from "./story.mjs";
 import { makeSliceReader } from "./survey.mjs";
 
 export const PPM = 150;
@@ -15,9 +15,12 @@ const u32 = (r, g, b) => (255 << 24 | (b & 255) << 16 | (g & 255) << 8 | (r & 25
 
 /** Paint one patch of land into an RGBA buffer. V maps pixels to world miles. Shared by the module and the sheet's tiles. */
 export function paintGround(land, buf, w, h, V, contours) {
-  const PAL = new Uint32Array(128), WATER = u32(44, 80, 92), PAPER = u32(238, 240, 226), cl = v => Math.max(0, Math.min(255, v));
+  const PAL = new Uint32Array(STORY_GROUND.length * 16), WATER = u32(44, 80, 92), PAPER = u32(238, 240, 226), cl = v => Math.max(0, Math.min(255, v));
   STORY_GROUND.forEach((C, t) => { const c = h2(C); for (let l = 0; l < 16; l++) { const f = .88 + l * .016; PAL[t * 16 + l] = u32(cl(c[0] * f), cl(c[1] * f), cl(c[2] * f)); } });
-  const T = land.terrain, E = land.elev, GW = land.gw, GH = land.gh, inv = 1 / CELL, lastT = new Int16Array(w + 1).fill(-1), fine = V.ppm > 70;
+  const style = { ...STYLE, ...(land.style ?? {}) }, relief = style.hills === "relief" || style.hills === "both", shallows = style.water === "shallows";
+  const SHALLOW = [u32(104, 152, 160), u32(130, 172, 172)], SAND = h2("#d9cba0");
+  const mix = (col, c2, a) => u32(cl((col & 255) * (1 - a) + c2[0] * a), cl(((col >> 8) & 255) * (1 - a) + c2[1] * a), cl(((col >> 16) & 255) * (1 - a) + c2[2] * a));
+  const T = land.terrain, E = land.elev, WET = land.wet, GW = land.gw, GH = land.gh, inv = 1 / CELL, lastT = new Int16Array(w + 1).fill(-1), fine = V.ppm > 70;
   if (!land.shade) { const S = land.shade = new Float32Array(GW * GH); for (let j = 1; j < GH - 1; j++) for (let i = 1; i < GW - 1; i++) { const k = j * GW + i; S[k] = (E[k + 1] - E[k - 1] + E[k + GW] - E[k - GW]) * 115; } }
   const shade = land.shade;
   for (let py = 0; py < h; py++) {
@@ -30,8 +33,14 @@ export function paintGround(land, buf, w, h, V, contours) {
       if (i < 1 || j < 1 || i >= GW - 2 || j >= GH - 2) { buf[py * w + px] = PAPER; leftT = -1; lastT[px] = -1; continue; }
       const k = j * GW + i, t = T[k], u = fi - i, v = fj - j, a4 = (wx * 23) | 0, b4 = (wy * 23) | 0, m1 = TBL[(b4 & 255) << 8 | (a4 & 255)], a5 = (wx * 83) | 0, b5 = (wy * 83) | 0, m2 = TBL[(b5 & 255) << 8 | (a5 & 255)];
       const hs = (shade[k] * (1 - u) + shade[k + 1] * u) * (1 - v) + (shade[k + GW] * (1 - u) + shade[k + GW + 1] * u) * v;
-      let col = PAL[t * 16 + Math.max(0, Math.min(15, (7.5 + hs + (m1 - .5) * 5 + (m2 - .5) * 2.4) | 0))];
-      if (contours && t !== 5) { const e = (E[k] * (1 - u) + E[k + 1] * u) * (1 - v) + (E[k + GW] * (1 - u) + E[k + GW + 1] * u) * v; if (((e * 34) | 0) !== ((E[k] * 34) | 0)) col = (col & 0xff000000) | ((col >> 1) & 0x7f7f7f); }
+      const rough = t === 6 || t === 8 || t === 9, hs2 = rough ? hs * 2.4 : hs;
+      let col = PAL[t * 16 + Math.max(0, Math.min(15, (7.5 + hs2 + (m1 - .5) * 5 + (m2 - .5) * 2.4) | 0))];
+      if ((contours && t !== 5) || (relief && rough)) { const e = (E[k] * (1 - u) + E[k + 1] * u) * (1 - v) + (E[k + GW] * (1 - u) + E[k + GW + 1] * u) * v, q = rough ? 22 : 34; if (((e * q) | 0) !== ((E[k] * q) | 0)) col = (col & 0xff000000) | ((col >> 1) & 0x7f7f7f); }
+      if (shallows && WET) {
+        const wt = (WET[k] * (1 - u) + WET[k + 1] * u) * (1 - v) + (WET[k + GW] * (1 - u) + WET[k + GW + 1] * u) * v;
+        if (t === 5) { if (wt < .6) col = SHALLOW[1]; else if (wt < .72) col = SHALLOW[0]; }
+        else if (wt > .28 && t !== 8 && t !== 9) col = mix(col, SAND, Math.min(1, (wt - .28) / .18) * .8);
+      }
       if ((leftT >= 0 && t !== leftT && (t === 5 || leftT === 5)) || (lastT[px] >= 0 && t !== lastT[px] && (t === 5 || lastT[px] === 5))) col = WATER;
       buf[py * w + px] = col; leftT = t; lastT[px] = t;
     }
@@ -42,6 +51,7 @@ export function paintGround(land, buf, w, h, V, contours) {
 export function renderMap(data) {
   /* The land is built one mile past the frame on every side, so the drawn edge has neighbours to blend with. */
   const slice = makeSliceReader(data.slice), f = data.frame, land = buildLand({ seed: data.seed, frame: { x0: f.x0 - 1, x1: f.x1 + 1, y0: f.y0 - 1, y1: f.y1 + 1 }, slice, paint: data.paint, lines: data.lines, pins: data.pins });
+  if (data.style) land.style = data.style;   /* art choices for rough country, see STYLE in story.mjs */
   const x0 = Math.floor(f.x0 / CELL) * CELL, x1 = Math.ceil(f.x1 / CELL) * CELL, y0 = Math.floor(f.y0 / CELL) * CELL, y1 = Math.ceil(f.y1 / CELL) * CELL, ppm = PPM, w = Math.round((x1 - x0) * ppm), h = Math.round((y1 - y0) * ppm);
   const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
   const c = cv.getContext("2d"), img = c.createImageData(w, h);

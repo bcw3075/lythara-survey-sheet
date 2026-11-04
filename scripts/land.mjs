@@ -3,7 +3,7 @@
    y north. Cells sit on one fixed lattice (CELL miles), so sheets that overlap agree exactly.
    Terrain codes: 0 fields, 1 open rough, 2 woods, 3 old growth, 4 low damp, 5 water, 6 hills, 7 bad ground. */
 export const CELL = 0.125;
-export const T = { fields: 0, rough: 1, woods: 2, old: 3, damp: 4, water: 5, hills: 6, bad: 7 };
+export const T = { fields: 0, rough: 1, woods: 2, old: 3, damp: 4, water: 5, hills: 6, bad: 7, crag: 8, snow: 9 };
 
 export function hash(ix, iy, s) {
   let h = (Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(s, 2147483647)) | 0;
@@ -66,7 +66,8 @@ export function paintSet(rows, i, j, v) {
 export function buildLand({ seed = 1147, frame, slice, paint = "", lines = [], pins = [] }) {
   const s = seed | 0, i0 = Math.floor(frame.x0 / CELL), i1 = Math.ceil(frame.x1 / CELL), j0 = Math.floor(frame.y0 / CELL), j1 = Math.ceil(frame.y1 / CELL);
   const gw = i1 - i0, gh = j1 - j0, x0 = i0 * CELL, x1 = i1 * CELL, y0 = j0 * CELL, y1 = j1 * CELL;
-  const terrain = new Uint8Array(gw * gh), elev = new Float32Array(gw * gh), near = new Uint8Array(gw * gh), r = Math.ceil(.3 / CELL);
+  const terrain = new Uint8Array(gw * gh), elev = new Float32Array(gw * gh), wet = new Float32Array(gw * gh), near = new Uint8Array(gw * gh), r = Math.ceil(.3 / CELL);
+  const frac = slice.fracAt ? (c, x, y) => slice.fracAt(c, x, y) : (c, x, y) => (slice.classAt(x, y) === c ? 1 : 0);
   const courses = lines.map(l => ({ ...l, course: lineCourse(l, s) }));
   for (const l of courses) if (l.kind === "creek" || l.kind === "river") for (const p of l.course) {
     const ci = Math.floor(p.x / CELL) - i0, cj = j1 - 1 - Math.floor(p.y / CELL);
@@ -76,12 +77,18 @@ export function buildLand({ seed = 1147, frame, slice, paint = "", lines = [], p
   for (let j = 0; j < gh; j++) {
     const y = (j1 - j - .5) * CELL;
     for (let i = 0; i < gw; i++) {
-      const x = (i0 + i + .5) * CELL, k = j * gw + i, e = fbm(x / 6, y / 6, 3, s + 11); elev[k] = e;
+      const x = (i0 + i + .5) * CELL, k = j * gw + i;
       const wx = x + (fbm(x / 1.7, y / 1.7, 2, s + 21) - .5) * 1.5, wy = y + (fbm(x / 1.7, y / 1.7, 2, s + 27) - .5) * 1.5;
-      const cls = slice.classAt(x, y);
-      if (cls === 2) { terrain[k] = T.water; continue; }
-      if (cls === 3 || cls === 4) { terrain[k] = T.hills; continue; }
+      /* the survey's mile squares become soft shapes: each class is read as a share of the ground, warped by noise, and wins past a half */
+      const fw = frac(2, wx, wy), fr = frac(3, wx, wy), fs = frac(4, wx, wy), fh = frac(5, wx, wy);
+      wet[k] = fw;
+      /* higher ground where the map shows rock, snow and hills, so the shading and the trees follow it */
+      const e = fbm(x / 6, y / 6, 3, s + 11) * (1 - .55 * (fr + fs + .6 * fh)) + .25 * fh + .45 * fr + .55 * fs; elev[k] = Math.min(1, e);
+      if (fw > .5) { terrain[k] = T.water; continue; }
+      if (fs > .5) { terrain[k] = T.snow; continue; }
+      if (fr > .5 || fr + fs > .62) { terrain[k] = T.crag; continue; }
       let o = slice.openAt(wx, wy), fieldsNear = false;
+      const cls = fh > .5 ? 5 : slice.classAt(x, y);
       for (const v of villages) {
         const dx = wx - v.x, dy = wy - v.y;
         if (v.home) {
@@ -93,6 +100,7 @@ export function buildLand({ seed = 1147, frame, slice, paint = "", lines = [], p
       }
       let t;
       if (cls === 5 && o > .5) t = T.hills;
+      else if (fh > .5 && o <= .5) { t = fbm(x / 2.2, y / 2.2, 2, s + 71) > .45 ? T.woods : T.hills; }
       else if (o > .5) {
         t = T.rough;
         if (fieldsNear) { const n = fbm(x / .9, y / .9, 2, s + 31); let D = 99; for (const v of villages) D = Math.min(D, Math.hypot(x - v.x, y - v.y)); if ((D < 3 + 3 * n && n > .36) || (D < 9 && n > .63)) t = T.fields; }
@@ -107,9 +115,10 @@ export function buildLand({ seed = 1147, frame, slice, paint = "", lines = [], p
   for (const [j, list] of rows) { const jj = j1 - 1 - j; if (jj < 0 || jj >= gh) continue; for (const [a, n, v] of list) for (let i = Math.max(a, i0); i < Math.min(a + n, i1); i++) terrain[jj * gw + i - i0] = v; }
   const idx = (x, y) => { const i = Math.floor(x / CELL) - i0, j = j1 - 1 - Math.floor(y / CELL); return (i < 0 || j < 0 || i >= gw || j >= gh) ? -1 : j * gw + i; };
   const land = {
-    s, i0, j1, gw, gh, x0, x1, y0, y1, terrain, elev, lines: courses,
+    s, i0, j1, gw, gh, x0, x1, y0, y1, terrain, elev, wet, lines: courses,
     tAt: (x, y) => { const k = idx(x, y); return k < 0 ? T.rough : terrain[k]; },
     elevAt: (x, y) => { const k = idx(x, y); return k < 0 ? .5 : elev[k]; },
+    wetAt: (x, y) => { const k = idx(x, y); return k < 0 ? 0 : wet[k]; },
     waterPoints: courses.filter(l => l.kind === "creek" || l.kind === "river").flatMap(l => l.course)
   };
   land.fingerprint = landFingerprint(land);

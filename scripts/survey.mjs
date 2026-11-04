@@ -103,6 +103,12 @@ export function makeSliceReader(slice) {
       const o = c => (c >> 4) === CLASS.forest || (c >> 4) === CLASS.open || (c >> 4) === CLASS.hills ? (c & 15) / 9 : 1;
       return (o(at(i, j)) * (1 - u) + o(at(i + 1, j)) * u) * (1 - v) + (o(at(i, j + 1)) * (1 - u) + o(at(i + 1, j + 1)) * u) * v;
     },
-    classAt(x, y) { return at(Math.floor(x - slice.x0), Math.floor(slice.y1 - y)) >> 4; }
+    classAt(x, y) { return at(Math.floor(x - slice.x0), Math.floor(slice.y1 - y)) >> 4; },
+    /** How much of the ground around a point is of one class, 0..1, interpolated between mile centres. Smooth edges come from this. */
+    fracAt(cls, x, y) {
+      const fx = x - slice.x0 - .5, fy = slice.y1 - y - .5, i = Math.floor(fx), j = Math.floor(fy), u = fx - i, v = fy - j;
+      const f = c => (c >> 4) === cls ? 1 : 0;
+      return (f(at(i, j)) * (1 - u) + f(at(i + 1, j)) * u) * (1 - v) + (f(at(i, j + 1)) * (1 - u) + f(at(i + 1, j + 1)) * u) * v;
+    }
   };
 }
