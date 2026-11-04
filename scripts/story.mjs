@@ -6,7 +6,11 @@ import { CELL, hash, fbm } from "./land.mjs";
 export const STORY_GROUND = ["#c6b670", "#b0ac62", "#747c44", "#48522e", "#8a965e", "#508696", "#b9ad7a", "#6e625c", "#8f8a7e", "#e6e8e4"];
 /* Art choices for rough country. hills: "marks" (small rock marks, the first version) | "hummocks" (sparse rounded hills) | "relief" (shading and contour lines only) | "both".
    water: "plain" (flat colour with an edge line) | "shallows" (pale shallows, a sandy rim, wave marks). peaks: "classic" (storybook peaks with snow caps) | "shaded" (shaded rock with a few crags). */
-export const STYLE = { hills: "hummocks", water: "shallows", peaks: "classic" };
+export const STYLE = { hills: "contours", water: "shallows", peaks: "classic" };
+/* hills also: "contours" (hillshade + contour lines every 100 ft, labelled every 500 ft, on open and rough ground) | "tinted" (contours plus colour by height on rough ground).
+   peaks also: "none". water also: "ripples" (shore lines echoing out), "depth" (bands darkening offshore), "hatch" (ink hatching along the shore), "paper" (bare paper with an inked edge and ripples).
+   Elevation is invented but fixed: 2,400 ft at the highest point a sheet can reach; contour values read from that. */
+export const FT_PER_ELEV = 2400;
 const STORY_HOLLOW = .41, STORY_RIDGE = .64;
 export function makeStory(land) {
   const { tAt, elevAt } = land, creekPts = land.waterPoints, seed = land.s, GW = land.gw, GH = land.gh, i0 = land.i0, j1 = land.j1;
@@ -74,7 +78,8 @@ export function makeStory(land) {
     else if (t === 1 && r3 < .05) scrub(c, px, py, k, P.oak[(r4 * 4) | 0]);
     else if (t === 6 && r3 < .16 && (style.hills === "marks" || style.hills === "both")) { const q = 9 * K; c.fillStyle = "#d8c9a3"; c.strokeStyle = "#4d4231"; c.lineWidth = LW; c.beginPath(); c.moveTo(px - q, py + q * .6); c.lineTo(px, py - q * .7); c.lineTo(px + q, py + q * .6); c.closePath(); c.fill(); c.stroke(); }
     else if (t === 6 && r3 < .07) { c.strokeStyle = "rgba(80,66,40,.45)"; c.lineWidth = 1.1 * LW; c.beginPath(); c.moveTo(px - 5 * K, py); c.lineTo(px + 5 * K, py - K); c.stroke(); }
-    else if (t === 5 && style.water === "shallows" && r3 < .07 && land.wetAt(wx, wy) > .72) { const q = 5 * K; c.strokeStyle = "rgba(220,236,240,.55)"; c.lineWidth = 1.2 * LW; c.beginPath(); c.moveTo(px - 2 * q, py); c.quadraticCurveTo(px - q, py - q * .7, px, py); c.quadraticCurveTo(px + q, py + q * .7, px + 2 * q, py); c.stroke(); }
+    else if (t === 5 && style.water === "paper" && r3 < .05 && land.shoreAt(wx, wy) > .9) { const q = 6 * K; c.strokeStyle = style.water === "paper" ? "rgba(60,80,90,.5)" : "rgba(220,236,240,.45)"; c.lineWidth = 1.1 * LW; c.beginPath(); c.moveTo(px - 2 * q, py); c.quadraticCurveTo(px - q, py - q * .5, px, py); c.quadraticCurveTo(px + q, py + q * .5, px + 2 * q, py); c.stroke(); }
+    else if (t === 5 && (style.water === "shallows" || style.water === "plain") && r3 < .07 && land.shoreAt(wx, wy) > .6) { const q = 5 * K; c.strokeStyle = "rgba(220,236,240,.55)"; c.lineWidth = 1.2 * LW; c.beginPath(); c.moveTo(px - 2 * q, py); c.quadraticCurveTo(px - q, py - q * .7, px, py); c.quadraticCurveTo(px + q, py + q * .7, px + 2 * q, py); c.stroke(); }
     else if (t === 8 && style.peaks === "shaded" && r3 < .18) { const q = 7 * K; c.strokeStyle = "#3a3632"; c.lineWidth = 1.2 * LW; c.beginPath(); c.moveTo(px - q, py + q * .5); c.lineTo(px - q * .3, py - q * .6); c.lineTo(px + q * .2, py + q * .1); c.lineTo(px + q, py - q * .4); c.stroke(); }
     else if (t === 7 && r3 < .4) { const q = 8 * K; c.strokeStyle = "#2d262a"; c.lineWidth = 1.2 * LW; c.beginPath(); c.moveTo(px, py + q); c.lineTo(px, py - q); c.moveTo(px, py - q * .2); c.lineTo(px - q * .6, py - q * .7); c.moveTo(px, py); c.lineTo(px + q * .6, py - q * .6); c.stroke(); }
   }
@@ -116,10 +121,40 @@ export function makeStory(land) {
     };
     grid(sp * .64, 20, (wx, wy, t, px, py, r3, r4) => understory(c, wx, wy, t, px, py, r3, r4, K));
     if (style.hills === "hummocks" || style.hills === "both") grid(sp * 2.8, 40, (wx, wy, t, px, py, r3, r4) => { if (t === 6 && r3 < .75 && tAt(wx - .35, wy) === 6 && tAt(wx + .35, wy) === 6) hummock(c, px, py, K, r3, r4); });
+    if (style.hills === "contours" || style.hills === "tinted") {
+      /* contour labels: every 500 ft line gets a number where it crosses open ground */
+      const lv = 500 / FT_PER_ELEV, pxm = (V.X(1) - V.X(0));
+      c.font = `600 ${Math.max(10, 11 * K)}px "Barlow", "Segoe UI", sans-serif`; c.textAlign = "center"; c.textBaseline = "middle";
+      grid(sp * 9, 90, (wx, wy, t, px, py, r3) => {
+        if (t === 2 || t === 3 || t === 4 || t === 5 || r3 > .55) return;
+        const e0 = elevAt(wx, wy), e1 = elevAt(wx + .6, wy); if (e0 === e1) return;
+        const lo = Math.min(e0, e1), hi = Math.max(e0, e1), n = Math.ceil(lo / lv); if (n * lv > hi || n === 0) return;
+        const f = (n * lv - e0) / (e1 - e0), lx = wx + .6 * f, ly = wy, ft = n * 500;
+        const gx = elevAt(lx + .3, ly) - elevAt(lx - .3, ly), gy = elevAt(lx, ly + .3) - elevAt(lx, ly - .3), ang = Math.atan2(-gy, gx) + Math.PI / 2;
+        const X = V.X(lx), Y = V.Y(ly);
+        c.save(); c.translate(X, Y); c.rotate(ang > Math.PI / 2 || ang < -Math.PI / 2 ? ang + Math.PI : ang);
+        const tw = c.measureText(String(ft)).width; c.fillStyle = "rgba(232,226,200,.85)"; c.fillRect(-tw / 2 - 2 * K, -7 * K, tw + 4 * K, 14 * K);
+        c.fillStyle = "#4a3f2e"; c.fillText(String(ft), 0, 0); c.restore();
+      });
+    }
+    if (style.hills === "contours" || style.hills === "tinted") {
+      /* spot heights on summits: a small triangle and the height in feet */
+      grid(sp * 5, 95, (wx, wy, t, px, py) => {
+        if (t === 5) return; const e = elevAt(wx, wy); if (e < .42) return;
+        for (const [dx, dy] of [[.5, 0], [-.5, 0], [0, .5], [0, -.5], [.35, .35], [-.35, .35], [.35, -.35], [-.35, -.35]]) if (elevAt(wx + dx, wy + dy) > e) return;
+        const ft = Math.round(e * FT_PER_ELEV / 10) * 10, label = ft.toLocaleString("en-US"), q = 5 * K;
+        c.fillStyle = "#2d2925"; c.beginPath(); c.moveTo(px, py - q); c.lineTo(px + q * .9, py + q * .6); c.lineTo(px - q * .9, py + q * .6); c.closePath(); c.fill();
+        c.font = `600 ${Math.max(10, 11 * K)}px "Barlow", "Segoe UI", sans-serif`; c.textAlign = "left"; c.textBaseline = "middle";
+        const tw = c.measureText(label).width; c.fillStyle = "rgba(240,236,220,.85)"; c.fillRect(px + q * 1.3, py - 7 * K, tw + 4 * K, 14 * K);
+        c.fillStyle = "#2d2925"; c.fillText(label, px + q * 1.3 + 2 * K, py);
+      });
+    }
     if (style.peaks === "classic") {
       const mtn = t => t === 8 || t === 9;
-      grid(sp * 2.4, 80, (wx, wy, t, px, py, r3, r4) => { if (mtn(t) && r3 < .22) peak(c, px, py, K, r3 * 4, r4, t === 9 || elevAt(wx, wy) > .88, .5); });
-      grid(sp * 4.4, 60, (wx, wy, t, px, py, r3, r4) => { if (mtn(t) && r3 < .9 && mtn(tAt(wx - .4, wy)) && mtn(tAt(wx + .4, wy))) peak(c, px, py, K, r3, r4, t === 9 || elevAt(wx, wy) > .88); });
+      /* peaks stand where the ground is high: big ones near crests, small ones on the flanks, none in the valleys */
+      const crest = (x, y, d) => { const e = elevAt(x, y); return e >= elevAt(x + d, y) && e >= elevAt(x - d, y) && e >= elevAt(x, y + d) && e >= elevAt(x, y - d); };
+      grid(sp * 2.2, 80, (wx, wy, t, px, py, r3, r4) => { const e = elevAt(wx, wy); if (mtn(t) && r3 < .5 && e > .5 && e < .72) peak(c, px, py, K, r3 * 2, r4, t === 9 || e > .8, .5); });
+      grid(sp * 3.2, 60, (wx, wy, t, px, py, r3, r4) => { const e = elevAt(wx, wy); if (mtn(t) && e > .7 && crest(wx, wy, .3)) peak(c, px, py, K, r3, r4, t === 9 || e > .8); });
     }
     grid(sp, 0, (wx, wy, t, px, py, r3) => { const s = speciesAt(wx, wy, t); if (s) TREE[s.kind](c, px, py, K * (.86 + r3 * .32), s.col); });
   }

@@ -82,8 +82,13 @@ export function buildLand({ seed = 1147, frame, slice, paint = "", lines = [], p
       /* the survey's mile squares become soft shapes: each class is read as a share of the ground, warped by noise, and wins past a half */
       const fw = frac(2, wx, wy), fr = frac(3, wx, wy), fs = frac(4, wx, wy), fh = frac(5, wx, wy);
       wet[k] = fw;
-      /* higher ground where the map shows rock, snow and hills, so the shading and the trees follow it */
-      const e = fbm(x / 6, y / 6, 3, s + 11) * (1 - .55 * (fr + fs + .6 * fh)) + .25 * fh + .45 * fr + .55 * fs; elev[k] = Math.min(1, e);
+      /* Height. Ordinary country keeps the gentle 6-mile swell it always had. Hill country adds rolling knolls;
+         rock and snow add ridged mountains (sharp crests, deep valleys), so peaks and passes can be read from the contours. */
+      const base = fbm(x / 6, y / 6, 3, s + 11), mtn = Math.min(1, fr + fs), hill = fh * (1 - mtn);
+      const knoll = fbm(x / 1.4, y / 1.4, 3, s + 91), rg = 1 - Math.abs(2 * fbm(x / 2.6, y / 2.6, 4, s + 81) - 1);
+      const e = base * (1 - .6 * mtn - .35 * hill) + hill * (.14 + .26 * knoll) + mtn * (.22 + .5 * rg * rg + .08 * fs);
+      /* soft ceiling instead of a hard clamp, so the highest summits stay rounded instead of flat-topped */
+      elev[k] = Math.max(0, e > .8 ? .8 + .2 * Math.tanh((e - .8) / .2) : e);
       if (fw > .5) { terrain[k] = T.water; continue; }
       if (fs > .5) { terrain[k] = T.snow; continue; }
       if (fr > .5 || fr + fs > .62) { terrain[k] = T.crag; continue; }
@@ -113,12 +118,21 @@ export function buildLand({ seed = 1147, frame, slice, paint = "", lines = [], p
   }
   const rows = typeof paint === "string" ? decodePaint(paint) : paint;
   for (const [j, list] of rows) { const jj = j1 - 1 - j; if (jj < 0 || jj >= gh) continue; for (const [a, n, v] of list) for (let i = Math.max(a, i0); i < Math.min(a + n, i1); i++) terrain[jj * gw + i - i0] = v; }
+  /* distance from shore across water, in miles (two-pass chamfer); land is 0. Water art reads depth bands and ripples from it. */
+  const shore = new Float32Array(gw * gh), BIG = 1e6, d1 = CELL, d2 = CELL * Math.SQRT2;
+  for (let k = 0; k < shore.length; k++) shore[k] = terrain[k] === T.water ? BIG : 0;
+  for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) { const k = j * gw + i; if (!shore[k]) continue; let v = shore[k];
+    if (i > 0) v = Math.min(v, shore[k - 1] + d1); if (j > 0) { v = Math.min(v, shore[k - gw] + d1); if (i > 0) v = Math.min(v, shore[k - gw - 1] + d2); if (i < gw - 1) v = Math.min(v, shore[k - gw + 1] + d2); } shore[k] = v; }
+  for (let j = gh - 1; j >= 0; j--) for (let i = gw - 1; i >= 0; i--) { const k = j * gw + i; if (!shore[k]) continue; let v = shore[k];
+    if (i < gw - 1) v = Math.min(v, shore[k + 1] + d1); if (j < gh - 1) { v = Math.min(v, shore[k + gw] + d1); if (i < gw - 1) v = Math.min(v, shore[k + gw + 1] + d2); if (i > 0) v = Math.min(v, shore[k + gw - 1] + d2); } shore[k] = v; }
+  for (let k = 0; k < shore.length; k++) if (shore[k] >= BIG) shore[k] = 9;
   const idx = (x, y) => { const i = Math.floor(x / CELL) - i0, j = j1 - 1 - Math.floor(y / CELL); return (i < 0 || j < 0 || i >= gw || j >= gh) ? -1 : j * gw + i; };
   const land = {
-    s, i0, j1, gw, gh, x0, x1, y0, y1, terrain, elev, wet, lines: courses,
+    s, i0, j1, gw, gh, x0, x1, y0, y1, terrain, elev, wet, shore, lines: courses,
     tAt: (x, y) => { const k = idx(x, y); return k < 0 ? T.rough : terrain[k]; },
     elevAt: (x, y) => { const k = idx(x, y); return k < 0 ? .5 : elev[k]; },
     wetAt: (x, y) => { const k = idx(x, y); return k < 0 ? 0 : wet[k]; },
+    shoreAt: (x, y) => { const k = idx(x, y); return k < 0 ? 0 : shore[k]; },
     waterPoints: courses.filter(l => l.kind === "creek" || l.kind === "river").flatMap(l => l.course)
   };
   land.fingerprint = landFingerprint(land);
