@@ -80,12 +80,12 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40 }) {
   /* trees: one chance per 18-ft square of the world */
   lattice(18, 501, (wx, wy, u, v, r3, r4) => {
     const t = terrainAt(wx, wy);
-    const p = t === T.old ? .62 : t === T.woods ? .7 : t === T.damp ? .45 : t === T.rough ? .035 : t === T.hills ? .05 : t === T.fields ? .006 : 0;
+    const p = t === T.old ? .8 : t === T.woods ? .86 : t === T.damp ? .5 : t === T.rough ? .035 : t === T.hills ? .05 : t === T.fields ? .006 : 0;
     if (r3 >= p) return;
     let sp = story.speciesAt(wx, wy, t);
     for (let k = 1; !sp && forest(t) && k < 6; k++) sp = story.speciesAt(wx + k * .004, wy - k * .003, t);
     if (!sp) sp = { kind: t === T.damp ? "willow" : "oakS", col: (t === T.damp ? PAL.willow : PAL.oak)[(r4 * 3) | 0] };
-    const [rMin, rMax, tr] = SPECIES[sp.kind] ?? SPECIES.oak, R = (rMin + (rMax - rMin) * r4) * .72;
+    const [rMin, rMax, tr] = SPECIES[sp.kind] ?? SPECIES.oak, R = (rMin + (rMax - rMin) * r4) * (forest(t) ? 1.02 : .8);
     if (!clearOf(u, v, Math.max(2, tr * 2))) return;
     feats.trees.push({ u, v, R, trunk: tr * (.8 + r4 * .5), kind: sp.kind, col: sp.col, seed: r3 * 997 + r4 });
   });
@@ -290,8 +290,13 @@ function traceZero(c, F, fw, fh, ppf) {
    layers: "all" (one image), "ground" (no canopies; for the map) or "canopy" (canopies only, transparent; for an overhead tile). */
 const ihash = (x, y) => { let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 const sm = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+/* Colours measured from 60-odd straight-down summer drone photos of temperate woods, meadows and creeks (Unsplash, Nov 2026):
+   canopy luminance percentiles 5/20/40/60/80/95 for broadleaf and conifer stands; meadow grass about 95,124,52; water under trees 63,87,67. */
+const RAMP_BROAD = [[18, 26, 19], [29, 45, 28], [49, 73, 37], [76, 103, 48], [110, 139, 68], [164, 189, 96]];
+const RAMP_CONIFER = [[6, 15, 8], [13, 23, 14], [23, 35, 21], [36, 51, 30], [58, 75, 43], [93, 117, 70]];
+const ramp = (R, t) => { t = Math.max(0, Math.min(.9999, t)) * (R.length - 1); const i = Math.floor(t), f = t - i; return mixc(R[i], R[i + 1], f); };
 const REAL = {
-  [T.fields]: [[112, 122, 58], [160, 150, 86]], [T.rough]: [[100, 112, 52], [146, 140, 78]], [T.woods]: [[88, 72, 44], [66, 80, 38]], [T.old]: [[66, 54, 34], [50, 64, 32]],
+  [T.fields]: [[86, 116, 46], [118, 134, 60]], [T.rough]: [[92, 114, 50], [128, 132, 68]], [T.woods]: [[88, 72, 44], [66, 80, 38]], [T.old]: [[66, 54, 34], [50, 64, 32]],
   [T.damp]: [[80, 98, 54], [112, 116, 70]], [T.hills]: [[136, 126, 88], [116, 120, 68]], [T.bad]: [[96, 88, 82], [80, 74, 70]], [T.crag]: [[138, 134, 126], [112, 110, 104]], [T.snow]: [[232, 234, 236], [214, 220, 226]]
 };
 const GRASS = ["rgba(74,92,36,.55)", "rgba(98,118,46,.55)", "rgba(128,140,62,.5)", "rgba(170,160,92,.5)", "rgba(150,132,74,.45)", "rgba(112,124,58,.5)"];
@@ -333,10 +338,10 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
         }
         if (wa > 0) {
           const along = gx * ca - gy * sa, across = gx * sa + gy * ca, z = Math.min(1, wa);
-          col = mixc([112, 98, 68], [62, 98, 98], sm(0, .35, z)); col = mixc(col, [30, 62, 72], sm(.35, .9, z));
+          col = mixc([104, 96, 70], [63, 87, 72], sm(0, .35, z)); col = mixc(col, [34, 52, 48], sm(.35, .9, z));
           const st1 = tbl(along / 9, across / .7), st2 = tbl(along / 3 + 7, across / .4 + 3);
           d = (st1 - .5) * 16 + (st2 - .5) * 10 + (1 - z) * 6;
-          if (st1 > .7) d += (st1 - .7) * 110 * (1 - z * .5);
+          if (st1 > .74) d += (st1 - .74) * 80 * (1 - z * .5);
           if (z < .1) d += (n3 > .5 ? 40 : 20) * (1 - z / .1);
         }
         buf[py * w + px] = (255 << 24 | (Math.max(0, Math.min(255, col[2] + d)) << 16) | (Math.max(0, Math.min(255, col[1] + d)) << 8) | Math.max(0, Math.min(255, col[0] + d))) >>> 0;
@@ -385,6 +390,10 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
     for (const r of plan.feats.rocks) realRock(c, r.u * ppf, r.v * ppf, r.r * ppf, r.seed);
     /* deadfall */
     for (const g of plan.feats.logs) realLog(c, g.u * ppf, g.v * ppf, g.len * ppf, g.w * ppf, g.ang, g.u * 7 + g.v);
+    /* tree shadows: crisp, long, in the crown's outline, falling south-east (sun high in the north-west) */
+    c.save(); c.globalCompositeOperation = "multiply"; c.fillStyle = "rgb(118,124,138)"; c.filter = `blur(${Math.max(1, ppf * .35)}px)`;
+    for (const t of plan.feats.trees) { const R = t.R * ppf * .95, x = t.u * ppf + R * .72, y = t.v * ppf + R * .82; c.beginPath(); for (const f of florets(t)) { c.moveTo(x + f.x * R + f.r * R, y + f.y * R); c.arc(x + f.x * R, y + f.y * R, f.r * R, 0, 7); } c.fill(); }
+    c.restore();
     /* trunks and root flare, seen when the canopy above fades */
     for (const t of plan.feats.trees) { const x = t.u * ppf, y = t.v * ppf, r = Math.max(t.trunk, .5) * ppf;
       c.fillStyle = "rgba(10,8,4,.35)"; c.beginPath(); c.arc(x + r * .3, y + r * .35, r * 1.5, 0, 7); c.fill();
@@ -393,12 +402,12 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
   }
   if (layers !== "ground") {
     /* undergrowth then canopies, small first so big crowns sit on top */
-    for (const b of plan.feats.brush) realCanopy(c, b.u * ppf, b.v * ppf, b.r * ppf, hex(b.t === T.damp ? "#6c7e44" : "#4f5c2a"), b.u * 13 + b.v * 7, ppf, .7);
+    for (const b of plan.feats.brush) realCanopy(c, b.u * ppf, b.v * ppf, b.r * ppf, null, b.u * 13 + b.v * 7, ppf, .8, "brush");
     const trees = plan.feats.trees.slice().sort((a, b) => a.R - b.R);
     for (const t of trees) {
       const x = t.u * ppf, y = t.v * ppf, R = t.R * ppf, col = hex(t.col);
       if (t.kind === "pine" || t.kind === "hemlock") realConifer(c, x, y, R, col, t.seed, ppf);
-      else { realCanopy(c, x, y, R, col, t.seed, ppf, 1); if (t.kind === "willow") willowStrands(c, x, y, R, col, t.seed, ppf); }
+      else { realCanopy(c, x, y, R, col, t.seed, ppf, 1, t.kind); if (t.kind === "willow") willowStrands(c, x, y, R, col, t.seed, ppf); }
     }
   }
   if (layers === "all") { c.strokeStyle = "rgba(20,20,10,.09)"; c.lineWidth = Math.max(1, pxSq / 70); c.beginPath(); for (let i = 0; i <= plan.cols; i++) { c.moveTo(i * pxSq + .5, 0); c.lineTo(i * pxSq + .5, h); } for (let j = 0; j <= plan.rows; j++) { c.moveTo(0, j * pxSq + .5); c.lineTo(w, j * pxSq + .5); } c.stroke(); }
@@ -410,54 +419,50 @@ function rng(seed) { let a = (Math.imul(seed | 0, 2654435761) ^ 0x9e3779b9) >>> 
 /* foliage that reads at close range: the overland's darkest greens are lifted toward a living mid-green */
 const liftDark = col => { const m = (col[0] + col[1] + col[2]) / 3; return m < 75 ? mixc(col, [86, 100, 48], .45 * (75 - m) / 40 + .2) : col; };
 function jitter(col, k, a) { return [col[0] + (hash(k, 1, a) - .5) * 26, col[1] + (hash(k, 2, a) - .5) * 26, col[2] + (hash(k, 3, a) - .5) * 18]; }
-/* Each crown gets its own outline: an oval stretch, a few bulges (low harmonics) and a lean off the trunk. */
-function crownShape(r_, irreg) {
-  const e = .86 + r_() * .14, rot = r_() * 6.283, h = [[2, r_() * .5 + .5], [3, r_() * .6 + .4], [5, r_() * .5]].map(([k, a]) => [k, a * irreg * (k === 5 ? .5 : 1), r_() * 6.283]);
-  const lean = [(r_() - .5) * .12, (r_() - .5) * .12];
-  const rad = th => 1 + h.reduce((s, [k, a, p]) => s + a * Math.cos(k * th + p), 0);
-  /* a point in the unit disc (angle th, fraction rho of the edge) to crown-local offsets in units of R */
-  const at = (th, rho) => { const r = rho * rad(th), x = Math.cos(th) * r, y = Math.sin(th) * r * e, c = Math.cos(rot), s = Math.sin(rot); return [x * c - y * s + lean[0], x * s + y * c + lean[1]]; };
-  return { at, rad };
+/* A broadleaf crown seen from above is a cluster of florets (sub-domes), each lit on its own sun side, with dark crevices between. */
+function florets(t) {
+  const r_ = rng(Math.round(t.seed * 9973) + 113), Rft = t.R, n = 4 + Math.round(Rft / 2.1), out = [{ x: (r_() - .5) * .12, y: (r_() - .5) * .12, r: .44 + r_() * .1, h: 1 }];
+  for (let i = 1; i < n; i++) { const a = r_() * 6.283, d = .3 + r_() * .36; out.push({ x: Math.cos(a) * d, y: Math.sin(a) * d * (.85 + r_() * .15), r: .26 + r_() * .16, h: 1 - d * .55 }); }
+  return out;
 }
-function realCanopy(c, x, y, R, col, seed, ppf, scale) {
-  const r_ = rng(Math.round(seed * 9973) + 17), Rft = R / ppf; col = liftDark(col);
-  const shape = crownShape(r_, scale < 1 ? .12 : .06 + r_() * .06), R2 = R * (.9 + r_() * .2);
-  /* soft shadow cast to the south-east, in the crown's own outline */
-  c.save(); c.shadowColor = "rgba(0,0,0,.55)"; c.shadowBlur = R2 * .5; c.shadowOffsetX = R2 * .34; c.shadowOffsetY = R2 * .4;
-  c.fillStyle = shade(col, -48); c.beginPath();
-  for (let k = 0; k <= 48; k++) { const [dx, dy] = shape.at(k / 48 * 6.283, .86); k ? c.lineTo(x + dx * R2, y + dy * R2) : c.moveTo(x + dx * R2, y + dy * R2); }
-  c.closePath(); c.fill(); c.restore();
-  /* leaf dabs on a dome, each lit by its slope toward the north-west sun; deepest first so the top of the crown sits above */
-  const leaf = Math.max(.32, Math.min(.6, Rft * .045)), N = Math.round((40 + 3.1 * (Rft / leaf) ** 2 * .55) * scale), dabs = [], Lx = -.52, Ly = -.56, Lz = .64;
-  for (let i = 0; i < N; i++) {
-    const th = r_() * 6.283, rho = Math.pow(r_(), .6) * 1.03, nz = Math.sqrt(Math.max(0, 1 - Math.min(1, rho) ** 2)), [dx, dy] = shape.at(th, rho);
-    const lum = Math.cos(th) * rho * Lx + Math.sin(th) * rho * Ly + nz * Lz;
-    dabs.push({ dx, dy, nz, lum, r: (.7 + r_() * .9) * leaf * ppf, rot: r_() * 3.14, j: [r_() - .5, r_() - .5, r_() - .5, r_() - .5], g: r_() });
+function realCanopy(c, x, y, R, col, seed, ppf, scale, kind) {
+  const r_ = rng(Math.round(seed * 9973) + 17), Rft = R / ppf;
+  /* each tree its own tint: yellow-green to blue-green, lighter or darker */
+  const tint = (kind === "birch" || kind === "beech" || kind === "beechS" || kind === "willow" ? .35 : kind === "dark" ? -.3 : 0) + (r_() - .5) * .7, val = (kind === "dark" ? .82 : 1) * (.86 + r_() * .28);
+  const tone = c3 => [Math.min(255, (c3[0] + tint * 14) * val), Math.min(255, (c3[1] + tint * 6) * val), Math.min(255, (c3[2] - tint * 12) * val)];
+  const F = florets({ R: Rft, seed }), sun = [-.52, -.56, .64];
+  /* the dark body: crevices and the shaded underside show through between florets */
+  c.fillStyle = `rgb(${tone(RAMP_BROAD[0]).map(v => v | 0)})`; c.beginPath();
+  for (const f of F) { c.moveTo(x + f.x * R + f.r * R * 1.02, y + f.y * R); c.arc(x + f.x * R, y + f.y * R, f.r * R * 1.02, 0, 7); } c.fill();
+  /* leaf dabs, floret by floret (lowest florets first), each floret a small dome */
+  const leaf = Math.max(.3, Math.min(.55, Rft * .04));
+  for (const f of F.slice().sort((a, b) => a.h - b.h)) {
+    const fr = f.r * R, n = Math.round((20 + 2.4 * (f.r * Rft / leaf) ** 2) * scale), dabs = [];
+    for (let i = 0; i < n; i++) {
+      const a = r_() * 6.283, d = Math.pow(r_(), .62) * .98, nz = Math.sqrt(Math.max(0, 1 - d * d)), nx = Math.cos(a) * d, ny = Math.sin(a) * d;
+      const L = Math.max(0, nx * sun[0] + ny * sun[1] + nz * sun[2]), crown = -(f.x + f.y) * .12;
+      const t = Math.max(0, Math.min(1, .06 + L * .82 * (.7 + .3 * f.h) + crown + (r_() - .5) * .14 - (d > .86 ? .18 : 0)));
+      dabs.push({ px: x + f.x * R + nx * fr, py: y + f.y * R + ny * fr, nz, t, r: (.7 + r_() * .9) * leaf * ppf, rot: r_() * 3.14 });
+    }
+    dabs.sort((p, q) => p.nz - q.nz);
+    for (const p of dabs) { const cc = tone(ramp(RAMP_BROAD, p.t)); c.fillStyle = `rgb(${cc[0] | 0},${cc[1] | 0},${cc[2] | 0})`; c.beginPath(); c.ellipse(p.px, p.py, Math.max(1.2, p.r * 1.25), Math.max(1, p.r * .8), p.rot, 0, 7); c.fill(); }
   }
-  dabs.sort((p, q) => p.nz - q.nz);
-  for (const p of dabs) {
-    const base = [col[0] + p.j[0] * 16, col[1] + p.j[1] * 16, col[2] + p.j[2] * 10], lit = Math.max(-30, -32 + p.lum * 70 + p.j[3] * 14 - (p.nz < .25 ? 8 : 0));
-    c.fillStyle = shade(base, lit); c.beginPath(); c.ellipse(x + p.dx * R2, y + p.dy * R2, Math.max(1.2, p.r * 1.25), Math.max(1, p.r * .8), p.rot, 0, 7); c.fill();
-  }
-  c.fillStyle = shade(col, 62); c.globalAlpha = .45;
-  for (const p of dabs) if (p.lum > .62 && p.g < .35) { c.beginPath(); c.arc(x + p.dx * R2 - p.r * .3, y + p.dy * R2 - p.r * .3, Math.max(.8, p.r * .35), 0, 7); c.fill(); }
-  c.globalAlpha = 1;
 }
 function realConifer(c, x, y, R, col, seed, ppf) {
   const key = Math.round(seed * 97) | 0, r_ = rng(Math.round(seed * 9973) + 29), tilt = r_() * 6.283; col = liftDark(col);
-  c.save(); c.shadowColor = "rgba(0,0,0,.5)"; c.shadowBlur = R * .4; c.shadowOffsetX = R * .32; c.shadowOffsetY = R * .38; c.fillStyle = shade(col, -60); c.beginPath(); c.arc(x, y, R * .8, 0, 7); c.fill(); c.restore();
+  c.fillStyle = `rgb(${RAMP_CONIFER[0]})`; c.beginPath(); c.arc(x, y, R * .82, 0, 7); c.fill();
   for (let layer = 0; layer < 3; layer++) {
     const n = 14 + layer * 3, sc = 1 - layer * .26;
     for (let i = 0; i < n; i++) {
       const a = i / n * 6.283 + r_() * .55 + layer * .3, L = R * sc * (.7 + r_() * .36) * (1 + .12 * Math.cos(a - tilt)), wd = R * .17 * sc, lit = -(Math.cos(a) + Math.sin(a)) * 14 + layer * 20 - 30;
       const ex = x + Math.cos(a) * L, ey = y + Math.sin(a) * L, nx = -Math.sin(a) * wd, ny = Math.cos(a) * wd;
-      c.fillStyle = shade(jitter(col, i + layer * 40, key), lit); c.beginPath(); c.moveTo(x + nx, y + ny); c.quadraticCurveTo(x + (ex - x) * .6 + nx * .9, y + (ey - y) * .6 + ny * .9, ex, ey); c.quadraticCurveTo(x + (ex - x) * .6 - nx * .9, y + (ey - y) * .6 - ny * .9, x - nx, y - ny); c.closePath(); c.fill();
-      c.strokeStyle = shade(col, lit + 30); c.lineWidth = Math.max(1, ppf * .06); c.beginPath();
+      const cc = ramp(RAMP_CONIFER, Math.max(0, Math.min(1, (lit + 62) / 92 + (r_() - .5) * .1))); c.fillStyle = `rgb(${cc[0] | 0},${cc[1] | 0},${cc[2] | 0})`; c.beginPath(); c.moveTo(x + nx, y + ny); c.quadraticCurveTo(x + (ex - x) * .6 + nx * .9, y + (ey - y) * .6 + ny * .9, ex, ey); c.quadraticCurveTo(x + (ex - x) * .6 - nx * .9, y + (ey - y) * .6 - ny * .9, x - nx, y - ny); c.closePath(); c.fill();
+      const tc = ramp(RAMP_CONIFER, Math.max(0, Math.min(1, (lit + 95) / 92))); c.strokeStyle = `rgb(${tc[0] | 0},${tc[1] | 0},${tc[2] | 0})`; c.lineWidth = Math.max(1, ppf * .06); c.beginPath();
       for (let k = 2; k < 9; k++) { const f = k / 9, bx = x + (ex - x) * f, by = y + (ey - y) * f, ll = wd * (1 - f) * 1.1; c.moveTo(bx, by); c.lineTo(bx + Math.cos(a + .9) * ll, by + Math.sin(a + .9) * ll); c.moveTo(bx, by); c.lineTo(bx + Math.cos(a - .9) * ll, by + Math.sin(a - .9) * ll); }
       c.stroke();
     }
   }
-  c.fillStyle = shade(col, 30); c.beginPath(); c.arc(x - R * .05, y - R * .06, R * .12, 0, 7); c.fill();
+  const tip = ramp(RAMP_CONIFER, .95); c.fillStyle = `rgb(${tip.map(v => v | 0)})`; c.beginPath(); c.arc(x - R * .05, y - R * .06, R * .1, 0, 7); c.fill();
 }
 function willowStrands(c, x, y, R, col, seed, ppf) {
   const r_ = rng(Math.round(seed * 9973) + 41); c.lineWidth = Math.max(1, ppf * .05); c.globalAlpha = .32;
