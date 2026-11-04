@@ -192,39 +192,56 @@ export async function linkSheets() {
 Hooks.on("deleteScene", (scene, opts, userId) => { if (userId === game.user.id && game.user.isGM && scene.getFlag(ID, "state")?.frame) linkSheets().catch(e => console.warn(`${ID} | gates`, e)); });
 
 /* ---------- the party marker on the World Map ----------
-   A token on a sheet and a token on the World Map that share an actor are the same traveller at two scales. When the sheet
-   token moves (or arrives through a gate), the World Map token is put at the same place in the world; when the World Map
-   token is dragged to a spot inside the sheet it is on, the sheet token follows. Only the active GM does the moving. */
+   The PF2e party actor's token on the World Map is the party's marker. Its members' tokens on the sheets are the party itself.
+   When a member moves on a sheet (or arrives through a gate), the marker is put at the centre of the members on that sheet.
+   When the marker is dragged on the World Map onto ground some sheet covers, the members are moved there in formation,
+   changing sheet if they have to. Only the active GM does the moving; echoes carry a sync flag and are ignored. */
 const SYNC = "sync", isActiveGM = () => game.users.activeGM?.id === game.user.id;
+const partyActor = () => game.actors.find(a => a.type === "party" && a.members?.length) ?? game.actors.find(a => a.type === "party");
+const memberIds = party => new Set((party?.members ?? []).map(m => m.id));
 const tokenCentre = t => ({ x: t.x + (t.width ?? 1) * (t.parent.grid.sizeX ?? t.parent.grid.size) / 2, y: t.y + (t.height ?? 1) * (t.parent.grid.sizeY ?? t.parent.grid.size) / 2 });
-const placeAt = (t, c) => ({ x: Math.round(c.x - (t.width ?? 1) * (t.parent.grid.sizeX ?? t.parent.grid.size) / 2), y: Math.round(c.y - (t.height ?? 1) * (t.parent.grid.sizeY ?? t.parent.grid.size) / 2) });
-async function sheetTokenToMap(tok) {
-  const scene = tok.parent, meta = survey(); if (!meta?.sceneId || !tok.actorId) return;
+const placeAt = (t, c, scene = t.parent) => ({ x: Math.round(c.x - (t.width ?? 1) * (scene.grid.sizeX ?? scene.grid.size) / 2), y: Math.round(c.y - (t.height ?? 1) * (scene.grid.sizeY ?? scene.grid.size) / 2) });
+const membersOn = (scene, ids) => scene.tokens.filter(t => ids.has(t.actorId));
+const centroid = toks => { const c = toks.map(tokenCentre); return { x: c.reduce((a, p) => a + p.x, 0) / c.length, y: c.reduce((a, p) => a + p.y, 0) / c.length }; };
+async function markerFollow(scene) {
+  const party = partyActor(), meta = survey(); if (!party || !meta?.sceneId) return;
   const map = game.scenes.get(meta.sceneId); if (!map) return;
-  const twin = map.tokens.find(t => t.actorId === tok.actorId); if (!twin) return;
-  const g = mapGeometry(), c = tokenCentre(tok), w = toMiles(scene, c.x, c.y), at = placeAt(twin, g.toMap(w));
-  if (Math.abs(at.x - twin.x) < 1 && Math.abs(at.y - twin.y) < 1) return;
-  await twin.update(at, { animate: false, [ID]: { [SYNC]: true } });
+  const toks = membersOn(scene, memberIds(party)); if (!toks.length) return;
+  const g = mapGeometry(), c = centroid(toks), w = toMiles(scene, c.x, c.y), at = g.toMap(w);
+  let marker = map.tokens.find(t => t.actorId === party.id);
+  if (!marker) { const data = (await party.getTokenDocument({ x: 0, y: 0 })).toObject(); Object.assign(data, placeAt(data, at, map)); await map.createEmbeddedDocuments("Token", [data], { [ID]: { [SYNC]: true } }); return; }
+  const pos = placeAt(marker, at);
+  if (Math.abs(pos.x - marker.x) < 1 && Math.abs(pos.y - marker.y) < 1) return;
+  await marker.update(pos, { animate: false, [ID]: { [SYNC]: true } });
 }
-async function mapTokenToSheet(tok) {
-  const meta = survey(); if (!meta?.sceneId || tok.parent.id !== meta.sceneId || !tok.actorId) return;
-  const g = mapGeometry(), w = g.toWorld(tokenCentre(tok));
-  for (const sheet of sheetScenes()) {
-    const twin = sheet.tokens.find(t => t.actorId === tok.actorId); if (!twin) continue;
-    if (!inFrame(sheet.getFlag(ID, "state").frame, w)) continue;      /* dragged off this sheet's ground: leave the sheet token where it is */
-    const at = placeAt(twin, toScene(sheet, w.x, w.y));
-    if (Math.abs(at.x - twin.x) < 1 && Math.abs(at.y - twin.y) < 1) continue;
-    await twin.update(at, { animate: false, [ID]: { [SYNC]: true } });
+async function partyFollowMarker(marker) {
+  const party = partyActor(), meta = survey(); if (!party || !meta?.sceneId || marker.parent.id !== meta.sceneId || marker.actorId !== party.id) return;
+  const ids = memberIds(party), g = mapGeometry(), w = g.toWorld(tokenCentre(marker));
+  const sheets = sheetScenes(), here = sheets.filter(s => inFrame(s.getFlag(ID, "state").frame, w)); if (!here.length) return;   /* dropped on ground no sheet covers */
+  const from = sheets.find(s => membersOn(s, ids).length), target = (from && here.includes(from)) ? from : here[0], toks = from ? membersOn(from, ids) : [];
+  if (!toks.length) return;
+  const c = centroid(toks), dest = toScene(target, w.x, w.y);
+  if (target === from) {
+    const updates = toks.map(t => { const tc = tokenCentre(t), p = placeAt(t, { x: dest.x + tc.x - c.x, y: dest.y + tc.y - c.y }); return { _id: t.id, ...p }; });
+    await from.updateEmbeddedDocuments("Token", updates, { animate: false, [ID]: { [SYNC]: true } });
+  } else {
+    /* the party changes sheet: keep each token's place in the group, scaled across the two sheets' grids */
+    const k = (target.grid.size ?? PPM) / (from.grid.size ?? PPM);
+    const creates = toks.map(t => { const d = t.toObject(); delete d._id; const tc = tokenCentre(t); Object.assign(d, placeAt(d, { x: dest.x + (tc.x - c.x) * k, y: dest.y + (tc.y - c.y) * k }, target)); return d; });
+    await target.createEmbeddedDocuments("Token", creates, { [ID]: { [SYNC]: true } });
+    await from.deleteEmbeddedDocuments("Token", toks.map(t => t.id), { [ID]: { [SYNC]: true } });
+    const owners = game.users.filter(u => u.active && !u.isGM && toks.some(t => t.actor?.testUserPermission(u, "OWNER")));
+    if (owners.length) await target.pullUsers?.(owners);
   }
 }
 Hooks.on("updateToken", (tok, change, opts) => {
   if (!isActiveGM() || opts?.[ID]?.[SYNC] || !("x" in change || "y" in change)) return;
-  const task = tok.parent.getFlag(ID, "state")?.frame ? sheetTokenToMap(tok) : mapTokenToSheet(tok);
-  task.catch(e => console.warn(`${ID} | marker sync`, e));
+  const task = tok.parent.getFlag(ID, "state")?.frame ? markerFollow(tok.parent) : partyFollowMarker(tok);
+  task.catch(e => console.warn(`${ID} | party marker`, e));
 });
-Hooks.on("createToken", (tok, opts) => {   /* a token arriving on a sheet through a gate */
-  if (!isActiveGM() || !tok.parent.getFlag(ID, "state")?.frame) return;
-  sheetTokenToMap(tok).catch(e => console.warn(`${ID} | marker sync`, e));
+Hooks.on("createToken", (tok, opts) => {   /* a member arriving on a sheet through a gate */
+  if (!isActiveGM() || opts?.[ID]?.[SYNC] || !tok.parent.getFlag(ID, "state")?.frame) return;
+  markerFollow(tok.parent).catch(e => console.warn(`${ID} | party marker`, e));
 });
 
 /** A pin on the World Map that opens the sheet. */
