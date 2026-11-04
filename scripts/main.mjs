@@ -205,7 +205,6 @@ const tokenCentre = (t, pos = t) => ({ x: (pos.x ?? t.x) + (t.width ?? 1) * (t.p
 const placeAt = (t, c, scene = t.parent) => ({ x: Math.round(c.x - (t.width ?? 1) * (scene.grid.sizeX ?? scene.grid.size) / 2), y: Math.round(c.y - (t.height ?? 1) * (scene.grid.sizeY ?? scene.grid.size) / 2) });
 /* the party on a sheet: its party token if it has one, else its members' tokens */
 const partyOn = (scene, party) => { const own = scene.tokens.filter(t => t.actorId === party.id); return own.length ? own : scene.tokens.filter(t => memberIds(party).has(t.actorId)); };
-const travellersOn = (scene, party) => scene.tokens.filter(t => t.actorId === party.id || memberIds(party).has(t.actorId));
 const centroid = (toks, moved) => { const c = toks.map(t => tokenCentre(t, moved?.id === t.id ? moved : t)); return { x: c.reduce((a, p) => a + p.x, 0) / c.length, y: c.reduce((a, p) => a + p.y, 0) / c.length }; };
 async function markerFollow(scene, moved) {
   const party = partyActor(), meta = survey(); if (!party || !meta?.sceneId) return;
@@ -248,29 +247,30 @@ async function placePartyOnNewSheet(scene) {
 }
 async function partyFollowMarker(marker, pos) {
   const party = partyActor(), meta = survey(); if (!party || !meta?.sceneId || marker.parent.id !== meta.sceneId || marker.actorId !== party.id) return;
-  const g = mapGeometry(), w = g.toWorld(tokenCentre(marker, pos));
+  const g = mapGeometry(), w = g.toWorld(tokenCentre(marker, pos)), ids = memberIds(party);
   const sheets = sheetScenes(), here = sheets.filter(s => inFrame(s.getFlag(ID, "state").frame, w)); if (!here.length) return;   /* dropped on ground no sheet covers */
-  /* which sheet to land on when several cover the spot: the one the party is on, else the active scene, else the one centred nearest */
+  /* the members go to one sheet: the covering sheet they are already on, else the active scene, else the nearest-centred */
   const near = s => { const f = s.getFlag(ID, "state").frame; return Math.hypot((f.x0 + f.x1) / 2 - w.x, (f.y0 + f.y1) / 2 - w.y); };
-  const from = sheets.find(s => travellersOn(s, party).length), active = here.find(s => s.active);
-  const target = (from && here.includes(from)) ? from : active ?? here.sort((a, b) => near(a) - near(b))[0], toks = from ? travellersOn(from, party) : [];
+  const members = sheets.flatMap(s => s.tokens.filter(t => ids.has(t.actorId)).map(t => ({ t, s })));
+  const target = here.find(s => members.some(m => m.s === s)) ?? here.find(s => s.active) ?? here.slice().sort((a, b) => near(a) - near(b))[0];
   const dest = toScene(target, w.x, w.y);
-  if (!toks.length) { await placeParty(target, party, dest); return; }   /* the party is on no sheet yet: it appears here */
-  const c = centroid(partyOn(from, party));
-  if (target === from) {
-    const updates = toks.map(t => { const tc = tokenCentre(t), p = placeAt(t, { x: dest.x + tc.x - c.x, y: dest.y + tc.y - c.y }); return { _id: t.id, ...p }; });
-    await from.updateEmbeddedDocuments("Token", updates, { animate: false, [ID]: { [SYNC]: true } });
-  } else {
-    /* the party changes sheet: keep each token's place in the group, scaled across the two sheets' grids */
-    const k = (target.grid.size ?? PPM) / (from.grid.size ?? PPM);
-    const creates = toks.map(t => { const d = t.toObject(); delete d._id; const tc = tokenCentre(t); Object.assign(d, placeAt(d, { x: dest.x + (tc.x - c.x) * k, y: dest.y + (tc.y - c.y) * k }, target)); return d; });
-    await target.createEmbeddedDocuments("Token", creates, { [ID]: { [SYNC]: true } });
-    await from.deleteEmbeddedDocuments("Token", toks.map(t => t.id), { [ID]: { [SYNC]: true } });
-    const owners = game.users.filter(u => u.active && !u.isGM && toks.some(t => t.actor?.testUserPermission(u, "OWNER")));
-    if (owners.length) await target.pullUsers?.(owners);
+  /* party tokens first: one on every covering sheet, none elsewhere */
+  await syncPartyTokens(w, party);
+  /* members keep their offsets from the party token on their own sheet (or from their centre) */
+  for (const s of new Set(members.map(m => m.s))) {
+    const toks = members.filter(m => m.s === s).map(m => m.t), anchor = s.tokens.find(t => t.actorId === party.id), c = anchor ? tokenCentre(anchor) : centroid(toks);
+    if (s === target) {
+      const updates = toks.map(t => { const tc = tokenCentre(t); return { _id: t.id, ...placeAt(t, { x: dest.x + tc.x - c.x, y: dest.y + tc.y - c.y }) }; });
+      await s.updateEmbeddedDocuments("Token", updates, { animate: false, [ID]: { [SYNC]: true } });
+    } else {
+      const k = (target.grid.size ?? PPM) / (s.grid.size ?? PPM);
+      const creates = toks.map(t => { const d = t.toObject(); delete d._id; const tc = tokenCentre(t); Object.assign(d, placeAt(d, { x: dest.x + (tc.x - c.x) * k, y: dest.y + (tc.y - c.y) * k }, target)); return d; });
+      await target.createEmbeddedDocuments("Token", creates, { [ID]: { [SYNC]: true } });
+      await s.deleteEmbeddedDocuments("Token", toks.map(t => t.id), { [ID]: { [SYNC]: true } });
+      const owners = game.users.filter(u => u.active && !u.isGM && toks.some(t => t.actor?.testUserPermission(u, "OWNER")));
+      if (owners.length) await target.pullUsers?.(owners);
+    }
   }
-  if (!target.tokens.some(t => t.actorId === party.id)) await placeParty(target, party, dest);   /* the sheet always carries the party token itself */
-  await syncPartyTokens(w, party, target);
 }
 Hooks.on("updateToken", (tok, change, opts) => {
   if (!isActiveGM() || opts?.[ID]?.[SYNC] || !("x" in change || "y" in change)) return;
