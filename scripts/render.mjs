@@ -1,6 +1,6 @@
 /* Draws a sheet's land into a canvas for Foundry. The sheet artifact draws the same land with the same code. */
 import { CELL, buildLand, landFingerprint } from "./land.mjs";
-import { STORY_GROUND, STYLE, FT_PER_ELEV, makeStory } from "./story.mjs";
+import { STORY_GROUND, STYLE, makeStory } from "./story.mjs";
 import { makeSliceReader } from "./survey.mjs";
 
 export const PPM = 150;
@@ -21,13 +21,15 @@ export function paintGround(land, buf, w, h, V, contours) {
   const W = style.water, shallows = W === "shallows", depth = W === "depth", ripples = W === "ripples", hatch = W === "hatch", paper = W === "paper";
   const SHALLOW = [u32(104, 152, 160), u32(130, 172, 172)], SAND = h2("#d9cba0"), DEEP = [u32(38, 70, 84), u32(44, 80, 92), u32(58, 98, 110), u32(84, 128, 140)], PAPERW = u32(226, 226, 206), INK = u32(60, 80, 90);
   const TINT = [h2("#9fa872"), h2("#c2b47c"), h2("#b6a98a"), h2("#9a948a"), h2("#dcdcd6")];  /* low to high, on rough ground only */
-  const lvl = 100 / FT_PER_ELEV, lvl5 = 500 / FT_PER_ELEV;
+  /* contour interval by height: 100 ft in the lowland, 250 ft in the hills, 500 ft on the mountains; a contour never crosses these levels, so lines stay whole */
+  const ivl = e => e < 2500 ? 100 : e < 5000 ? 250 : 500;
   /* smooth height at a true (unjittered) world point, for clean contour lines */
   const eAt = (x, y) => { const fi = x * inv - land.i0 - .5, fj = land.j1 - y * inv - .5, i = Math.floor(fi), j = Math.floor(fj); if (i < 0 || j < 0 || i >= GW - 1 || j >= GH - 1) return -1; const u = fi - i, v = fj - j, k = j * GW + i; return (E[k] * (1 - u) + E[k + 1] * u) * (1 - v) + (E[k + GW] * (1 - u) + E[k + GW + 1] * u) * v; };
   const prevRow = contourMap ? new Int16Array(w).fill(-1) : null;
   const mix = (col, c2, a) => u32(cl((col & 255) * (1 - a) + c2[0] * a), cl(((col >> 8) & 255) * (1 - a) + c2[1] * a), cl(((col >> 16) & 255) * (1 - a) + c2[2] * a));
-  const T = land.terrain, E = land.elev, WET = land.wet, SH = land.shore, GW = land.gw, GH = land.gh, inv = 1 / CELL, lastT = new Int16Array(w + 1).fill(-1), fine = V.ppm > 70;
-  if (!land.shade) { const S = land.shade = new Float32Array(GW * GH); for (let j = 1; j < GH - 1; j++) for (let i = 1; i < GW - 1; i++) { const k = j * GW + i; S[k] = (E[k + 1] - E[k - 1] + E[k + GW] - E[k - GW]) * 115; } }
+  const T = land.terrain, E = land.elev, B = land.base, WET = land.wet, SH = land.shore, GW = land.gw, GH = land.gh, inv = 1 / CELL, lastT = new Int16Array(w + 1).fill(-1), fine = V.ppm > 70;
+  /* hillshade from the slope in feet per cell; 40 ft across a cell (320 ft per mile) is a full shade step */
+  if (!land.shade) { const S = land.shade = new Float32Array(GW * GH); for (let j = 1; j < GH - 1; j++) for (let i = 1; i < GW - 1; i++) { const k = j * GW + i; S[k] = Math.max(-5, Math.min(5, (E[k + 1] - E[k - 1] + E[k + GW] - E[k - GW]) / 40)); } }
   const shade = land.shade;
   for (let py = 0; py < h; py++) {
     const wy = V.wy(py + .5); let leftT = -1, leftL = -1;
@@ -42,12 +44,12 @@ export function paintGround(land, buf, w, h, V, contours) {
       const rough = t === 6 || t === 8 || t === 9, open = t === 0 || t === 1, hs2 = rough ? hs * (contourMap ? 3.2 : 2.4) : (contourMap && open ? hs * 1.3 : hs);
       let col = PAL[t * 16 + Math.max(0, Math.min(15, (7.5 + hs2 + (m1 - .5) * 5 + (m2 - .5) * 2.4) | 0))];
       const e = (E[k] * (1 - u) + E[k + 1] * u) * (1 - v) + (E[k + GW] * (1 - u) + E[k + GW + 1] * u) * v;
-      if (tinted && rough) { const z = Math.max(0, Math.min(3.999, (e - .3) / .17)), a = z | 0, f = z - a, c1 = TINT[a], c2 = TINT[a + 1]; col = mix(col, [c1[0] + (c2[0] - c1[0]) * f, c1[1] + (c2[1] - c1[1]) * f, c1[2] + (c2[2] - c1[2]) * f], .55); }
-      if ((contours && t !== 5) || (relief && rough)) { const q = rough ? 22 : 34; if (((e * q) | 0) !== ((E[k] * q) | 0)) col = (col & 0xff000000) | ((col >> 1) & 0x7f7f7f); }
+      if (tinted && rough) { const z = Math.max(0, Math.min(3.999, (e - B[k] - 300) / 1500)), a = z | 0, f = z - a, c1 = TINT[a], c2 = TINT[a + 1]; col = mix(col, [c1[0] + (c2[0] - c1[0]) * f, c1[1] + (c2[1] - c1[1]) * f, c1[2] + (c2[2] - c1[2]) * f], .55); }
+      if ((contours && t !== 5) || (relief && rough)) { const q = rough ? 1 / 110 : 1 / 70; if (((e * q) | 0) !== ((E[k] * q) | 0)) col = (col & 0xff000000) | ((col >> 1) & 0x7f7f7f); }
       if (contourMap) {
         /* contour lines every 100 ft, every 500 ft darker: a pixel is on a line when its level differs from the pixel left or above it */
-        const L = t === 5 ? -1 : Math.floor(eAt(wx, wy) / lvl), up = prevRow[px];
-        if (L >= 0 && ((leftL >= 0 && leftL !== L) || (up >= 0 && up !== L))) { const top = Math.max(L, leftL, up), idx = top % 5 === 0, w = (rough || open) ? 1 : .75; col = mix(col, [58, 48, 34], (idx ? .7 : .38) * w); }
+        const ee = t === 5 ? -1 : eAt(wx, wy), L = ee < 0 ? -1 : Math.floor(ee / ivl(ee)), up = prevRow[px];
+        if (L >= 0 && ((leftL >= 0 && leftL !== L) || (up >= 0 && up !== L))) { const top = Math.max(L, leftL, up), idx = (top * ivl(ee)) % 500 === 0, w = (rough || open) ? 1 : .75; col = mix(col, [58, 48, 34], (idx ? .7 : .38) * w); }
         leftL = L; prevRow[px] = L;
       }
       if (SH && t === 5) {

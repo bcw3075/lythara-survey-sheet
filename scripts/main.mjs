@@ -8,7 +8,7 @@ const IMAGE_DIR = "assets/map-tools";
 const PIN_FOLDER = "Survey Sheet Pins";
 const KIND_ICON = { village: "icons/svg/village.svg", camp: `modules/${ID}/icons/camp.svg`, ruin: `modules/${ID}/icons/ruin.svg`, gate: `modules/${ID}/icons/gate.svg`, site: `modules/${ID}/icons/site.svg` };
 const LINE_KINDS = ["creek", "river", "road", "track"];
-const RENDER_VERSION = 7, MAX_PX = 16000, MARGIN = 3;
+const RENDER_VERSION = 8, MAX_PX = 16000, MARGIN = 3;
 const PIN_STYLE = { hasBackground: false, alwaysShowTooltip: true, dropShadowEnabled: true, dropShadowColor: "#000000", dropShadowAlpha: 0.8, dropShadowDistance: 0, dropShadowBlur: 2, dropShadowAngle: 0, strokeColor: "#000000", strokeAlpha: 1, strokeThickness: 4 };
 
 const FP = () => foundry.applications.apps.FilePicker.implementation;
@@ -98,6 +98,7 @@ let surveyCache = null;
 async function loadSurvey() {
   const meta = survey();
   if (!meta) throw new Error("Survey the World Map first.");
+  if ((meta.version ?? 1) < SURVEY_VERSION) { const w = "The survey is from an older version and has no heights. Survey the World Map again from the Survey Sheet window."; if (!loadSurvey.warned) { loadSurvey.warned = true; ui.notifications?.warn(w); } }
   if (!surveyCache || surveyCache.path !== meta.path || surveyCache.date !== meta.date) surveyCache = { path: meta.path, date: meta.date, data: await surveyFromPng(route(meta.path) + "?v=" + meta.date) };
   return { meta, data: surveyCache.data };
 }

@@ -3,6 +3,10 @@
    y north. Cells sit on one fixed lattice (CELL miles), so sheets that overlap agree exactly.
    Terrain codes: 0 fields, 1 open rough, 2 woods, 3 old growth, 4 low damp, 5 water, 6 hills, 7 bad ground. */
 export const CELL = 0.125;
+/* The height model, in feet. The ocean is 0 and everything is measured from it. Lowland climbs inland toward `inland`
+   feet with a 1/e distance of `inlandMiles`, rolling by ±roll. Hills stand hillMin..hillMax over the lowland. Mountain rock
+   stands mtnMin over the lowland at the edge of a range and up to mtnMax `massMiles` into it. Snow lies above the snowline. */
+export const HEIGHTS = { inland: 1500, inlandMiles: 150, roll: 160, hillMin: 350, hillMax: 1250, mtnMin: 2000, mtnMax: 7000, massMiles: 10, snowline: 7000 };
 export const T = { fields: 0, rough: 1, woods: 2, old: 3, damp: 4, water: 5, hills: 6, bad: 7, crag: 8, snow: 9 };
 
 export function hash(ix, iy, s) {
@@ -66,8 +70,9 @@ export function paintSet(rows, i, j, v) {
 export function buildLand({ seed = 1147, frame, slice, paint = "", lines = [], pins = [] }) {
   const s = seed | 0, i0 = Math.floor(frame.x0 / CELL), i1 = Math.ceil(frame.x1 / CELL), j0 = Math.floor(frame.y0 / CELL), j1 = Math.ceil(frame.y1 / CELL);
   const gw = i1 - i0, gh = j1 - j0, x0 = i0 * CELL, x1 = i1 * CELL, y0 = j0 * CELL, y1 = j1 * CELL;
-  const terrain = new Uint8Array(gw * gh), elev = new Float32Array(gw * gh), wet = new Float32Array(gw * gh), near = new Uint8Array(gw * gh), r = Math.ceil(.3 / CELL);
+  const terrain = new Uint8Array(gw * gh), elev = new Float32Array(gw * gh), base = new Float32Array(gw * gh), relief = new Float32Array(gw * gh), wet = new Float32Array(gw * gh), near = new Uint8Array(gw * gh), r = Math.ceil(.3 / CELL);
   const frac = slice.fracAt ? (c, x, y) => slice.fracAt(c, x, y) : (c, x, y) => (slice.classAt(x, y) === c ? 1 : 0);
+  const seaAt = slice.seaAt ? (x, y) => slice.seaAt(x, y) : () => 60, massAt = slice.massAt ? (x, y) => slice.massAt(x, y) : () => 3;
   const courses = lines.map(l => ({ ...l, course: lineCourse(l, s) }));
   for (const l of courses) if (l.kind === "creek" || l.kind === "river") for (const p of l.course) {
     const ci = Math.floor(p.x / CELL) - i0, cj = j1 - 1 - Math.floor(p.y / CELL);
@@ -82,14 +87,20 @@ export function buildLand({ seed = 1147, frame, slice, paint = "", lines = [], p
       /* the survey's mile squares become soft shapes: each class is read as a share of the ground, warped by noise, and wins past a half */
       const fw = frac(2, wx, wy), fr = frac(3, wx, wy), fs = frac(4, wx, wy), fh = frac(5, wx, wy);
       wet[k] = fw;
-      /* Height. Ordinary country keeps the gentle 6-mile swell it always had. Hill country adds rolling knolls;
-         rock and snow add ridged mountains (sharp crests, deep valleys), so peaks and passes can be read from the contours. */
-      const base = fbm(x / 6, y / 6, 3, s + 11), mtn = Math.min(1, fr + fs), hill = fh * (1 - mtn);
+      /* Height, in feet above the sea (see HEIGHTS). swell is the gentle 6-mile roll ordinary country always had;
+         it still decides hollows and damp ground, so lowland terrain is unchanged by the height model. */
+      const swell = fbm(x / 6, y / 6, 3, s + 11), mtn = Math.min(1, fr + fs), hill = fh * (1 - mtn);
       const knoll = fbm(x / 1.4, y / 1.4, 3, s + 91), rg = 1 - Math.abs(2 * fbm(x / 2.6, y / 2.6, 4, s + 81) - 1);
-      const e = base * (1 - .6 * mtn - .35 * hill) + hill * (.14 + .26 * knoll) + mtn * (.22 + .5 * rg * rg + .08 * fs);
-      /* soft ceiling instead of a hard clamp, so the highest summits stay rounded instead of flat-topped */
-      elev[k] = Math.max(0, e > .8 ? .8 + .2 * Math.tanh((e - .8) / .2) : e);
-      if (fw > .5) { terrain[k] = T.water; continue; }
+      const dsea = seaAt(wx, wy), mass = massAt(wx, wy), H = HEIGHTS;
+      const b = H.inland * (1 - Math.exp(-dsea / H.inlandMiles));                                    /* lowland base: 0 at the shore, climbing inland */
+      const roll = (swell - .5) * 2 * H.roll * Math.min(1, dsea / 4);                                 /* local rise and fall, flat right at the coast */
+      const hillH = H.hillMin + (H.hillMax - H.hillMin) * knoll;                                      /* knolls over the base */
+      const mtnH = H.mtnMin + (H.mtnMax - H.mtnMin) * Math.min(1, mass / H.massMiles) * (.35 + .65 * rg * rg); /* ridged, higher deep inside a wide range */
+      let e = b + roll * (1 - mtn - hill) + hill * hillH + mtn * mtnH;
+      e += fs * Math.max(0, H.snowline * Math.min(1, (mass + 1) / 3) + 400 + 800 * rg - e);           /* snow lies above the snowline; a lone snow mile is only a high crag, a field 3 miles across reaches it */
+      if (fw > .5) { terrain[k] = T.water; base[k] = b; relief[k] = swell; elev[k] = dsea < 1.5 ? 0 : b; wet[k] = fw; continue; }
+      const lvl = dsea < 1.5 ? 0 : b;                                                                 /* shores run down to the water they touch */
+      elev[k] = Math.max(1, lvl + (e - lvl) * Math.max(0, Math.min(1, 1 - 2 * fw))); base[k] = b; relief[k] = swell;
       if (fs > .5) { terrain[k] = T.snow; continue; }
       if (fr > .5 || fr + fs > .62) { terrain[k] = T.crag; continue; }
       let o = slice.openAt(wx, wy), fieldsNear = false;
@@ -111,7 +122,7 @@ export function buildLand({ seed = 1147, frame, slice, paint = "", lines = [], p
         if (fieldsNear) { const n = fbm(x / .9, y / .9, 2, s + 31); let D = 99; for (const v of villages) D = Math.min(D, Math.hypot(x - v.x, y - v.y)); if ((D < 3 + 3 * n && n > .36) || (D < 9 && n > .63)) t = T.fields; }
       } else {
         const age = fbm(x / 2.6, y / 2.6, 3, s + 41) + .016 * Math.min(60, villages.reduce((m, v) => Math.min(m, Math.hypot(x - v.x, y - v.y)), 60)), damp = fbm(x / 1.1, y / 1.1, 2, s + 51);
-        if (e < .32 || (near[k] && damp > .5)) t = T.damp; else if (age > .67) t = T.old; else t = T.woods;
+        if (swell < .32 || (near[k] && damp > .5)) t = T.damp; else if (age > .67) t = T.old; else t = T.woods;
       }
       terrain[k] = t;
     }
@@ -128,9 +139,14 @@ export function buildLand({ seed = 1147, frame, slice, paint = "", lines = [], p
   for (let k = 0; k < shore.length; k++) if (shore[k] >= BIG) shore[k] = 9;
   const idx = (x, y) => { const i = Math.floor(x / CELL) - i0, j = j1 - 1 - Math.floor(y / CELL); return (i < 0 || j < 0 || i >= gw || j >= gh) ? -1 : j * gw + i; };
   const land = {
-    s, i0, j1, gw, gh, x0, x1, y0, y1, terrain, elev, wet, shore, lines: courses,
+    s, i0, j1, gw, gh, x0, x1, y0, y1, terrain, elev, base, relief, wet, shore, lines: courses, hasHeights: slice.hasHeights !== false,
     tAt: (x, y) => { const k = idx(x, y); return k < 0 ? T.rough : terrain[k]; },
-    elevAt: (x, y) => { const k = idx(x, y); return k < 0 ? .5 : elev[k]; },
+    /** feet above the sea */
+    elevAt: (x, y) => { const k = idx(x, y); return k < 0 ? 0 : elev[k]; },
+    /** feet above the local lowland */
+    riseAt: (x, y) => { const k = idx(x, y); return k < 0 ? 0 : elev[k] - base[k]; },
+    /** the gentle lowland swell, 0..1, that decides hollows and ridges for the trees */
+    reliefAt: (x, y) => { const k = idx(x, y); return k < 0 ? .5 : relief[k]; },
     wetAt: (x, y) => { const k = idx(x, y); return k < 0 ? 0 : wet[k]; },
     shoreAt: (x, y) => { const k = idx(x, y); return k < 0 ? 0 : shore[k]; },
     waterPoints: courses.filter(l => l.kind === "creek" || l.kind === "river").flatMap(l => l.course)
