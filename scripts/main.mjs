@@ -123,20 +123,74 @@ export async function createSheet({ hexes, name, margin = MARGIN, link = true } 
   if (!game.user.isGM) throw new Error("Only a GM can make a sheet.");
   hexes = cleanHexes(hexes);
   const frame = frameOfHexes(hexes, Math.max(0, Math.min(20, Number(margin) || 0)));
-  const g = mapGeometry(), ids = hexes.map(h => `row ${h.i}, col ${h.j}`);
-  name = String(name || `Sheet: ${ids.join("; ")}`).slice(0, 120);
+  const g = mapGeometry();
+  name = String(name ?? "").trim().slice(0, 120);
+  if (!name) throw new Error("Give the sheet its region name first (the name field above the button).");
+  if (sheetScenes().some(s => s.name.toLowerCase() === name.toLowerCase())) throw new Error(`There is already a sheet called ${name}.`);
   const scene = await Scene.create({
-    name, width: Math.round((frame.x1 - frame.x0) * PPM), height: Math.round((frame.y1 - frame.y0) * PPM), padding: 0.05,
+    name, folder: (await sheetFolder()).id, navigation: game.settings.get(ID, "sheetNav"),
+    width: Math.round((frame.x1 - frame.x0) * PPM), height: Math.round((frame.y1 - frame.y0) * PPM), padding: 0.05,
     grid: { type: 2, size: PPM, distance: 1, units: "mi", alpha: 0.12 }, tokenVision: true, fog: { mode: 2 },
     environment: { globalLight: { enabled: false } }, flags: { pf2e: { rulesBasedVision: false }, [ID]: { state: { version: 1, frame, hexes: hexes.map(h => ({ ...h, center: g.hex(h).center })), rev: null } } }
   });
   const r = await renderSheet(scene, { force: true });
   if (link && g.meta.sceneId) await linkOnMap(scene, frame, g);
+  await linkSheets();
   /* the party arrives with the land it has already walked revealed */
   let explored = 0;
   try { await syncExploration({ restore: false }); explored = await restoreScene(scene); } catch (e) { console.warn(`${ID} | exploration not carried over`, e); }
   return { ok: true, scene: scene.id, name: scene.name, frame, explored, ...r };
 }
+const SHEET_FOLDER = "Overland Sheets";
+async function sheetFolder() {
+  return game.folders.find(f => f.type === "Scene" && f.name === SHEET_FOLDER) ?? Folder.create({ name: SHEET_FOLDER, type: "Scene" });
+}
+/** Put every sheet in the Overland Sheets folder and set whether sheets show in the navigation bar. */
+export async function organizeSheets() {
+  const folder = await sheetFolder(), nav = game.settings.get(ID, "sheetNav"), updates = [];
+  for (const s of sheetScenes()) if (s.folder?.id !== folder.id || s.navigation !== nav) updates.push({ _id: s.id, folder: folder.id, navigation: nav });
+  if (updates.length) await Scene.updateDocuments(updates);
+  return { moved: updates.length, folder: folder.name };
+}
+
+/* ---------- gates between sheets ----------
+   Where one sheet runs past the edge of another, a strip half a mile wide along that edge teleports tokens onto the other
+   sheet at the same place in the world (a landing region, plain, on the far sheet). Walking off the east edge of one sheet
+   puts the party on the next sheet east, where it was heading. Teleport arrivals land just outside the landing strip, so a
+   gate back the other way does not fire on arrival (checked on 14.369). */
+const GATE_W = .5, SIDES = [["east", "x1"], ["west", "x0"], ["north", "y1"], ["south", "y0"]];
+function gateRects(A, B) {
+  /* strips on sheet A's edges where sheet B continues beyond; each with the matching landing rect on B */
+  const out = [], ix0 = Math.max(A.x0, B.x0), ix1 = Math.min(A.x1, B.x1), iy0 = Math.max(A.y0, B.y0), iy1 = Math.min(A.y1, B.y1);
+  if (ix1 - ix0 < .5 || iy1 - iy0 < .5) return out;             /* the sheets do not share enough ground for a gate */
+  const shift = (edge, far) => Math.abs(edge - far) < 2 * GATE_W;  /* overlap thinner than a mile: land just past the far sheet's own gate */
+  if (B.x1 > A.x1 + 1e-6) out.push({ side: "east", gate: { x0: A.x1 - GATE_W, x1: A.x1, y0: iy0, y1: iy1 }, land: shift(A.x1, B.x0) ? { x0: B.x0 + GATE_W, x1: B.x0 + 2 * GATE_W, y0: iy0, y1: iy1 } : { x0: A.x1 - GATE_W, x1: A.x1, y0: iy0, y1: iy1 } });
+  if (B.x0 < A.x0 - 1e-6) out.push({ side: "west", gate: { x0: A.x0, x1: A.x0 + GATE_W, y0: iy0, y1: iy1 }, land: shift(A.x0, B.x1) ? { x0: B.x1 - 2 * GATE_W, x1: B.x1 - GATE_W, y0: iy0, y1: iy1 } : { x0: A.x0, x1: A.x0 + GATE_W, y0: iy0, y1: iy1 } });
+  if (B.y1 > A.y1 + 1e-6) out.push({ side: "north", gate: { x0: ix0, x1: ix1, y0: A.y1 - GATE_W, y1: A.y1 }, land: shift(A.y1, B.y0) ? { x0: ix0, x1: ix1, y0: B.y0 + GATE_W, y1: B.y0 + 2 * GATE_W } : { x0: ix0, x1: ix1, y0: A.y1 - GATE_W, y1: A.y1 } });
+  if (B.y0 < A.y0 - 1e-6) out.push({ side: "south", gate: { x0: ix0, x1: ix1, y0: A.y0, y1: A.y0 + GATE_W }, land: shift(A.y0, B.y1) ? { x0: ix0, x1: ix1, y0: B.y1 - 2 * GATE_W, y1: B.y1 - GATE_W } : { x0: ix0, x1: ix1, y0: A.y0, y1: A.y0 + GATE_W } });
+  return out;
+}
+const rectShape = (scene, r) => { const p = toScene(scene, r.x0, r.y1), q = toScene(scene, r.x1, r.y0); return { type: "rectangle", x: p.x, y: p.y, width: q.x - p.x, height: q.y - p.y, rotation: 0, hole: false }; };
+/** Rebuild the gates between every pair of sheets. Safe to run any time; it removes the old gates first. */
+export async function linkSheets() {
+  if (!game.user.isGM) throw new Error("Only a GM can link sheets.");
+  const sheets = sheetScenes();
+  for (const s of sheets) { const ids = s.regions.filter(r => r.getFlag(ID, "gate")).map(r => r.id); if (ids.length) await s.deleteEmbeddedDocuments("Region", ids); }
+  let gates = 0;
+  for (const A of sheets) for (const B of sheets) {
+    if (A === B) continue;
+    const fa = A.getFlag(ID, "state").frame, fb = B.getFlag(ID, "state").frame;
+    for (const g of gateRects(fa, fb)) {
+      const [land] = await B.createEmbeddedDocuments("Region", [{ name: `Landing from ${A.name}`, color: "#c9a227", visibility: CONST.REGION_VISIBILITY.LAYER, shapes: [rectShape(B, g.land)], flags: { [ID]: { gate: { kind: "landing", from: A.id, side: g.side } } } }]);
+      const [gate] = await A.createEmbeddedDocuments("Region", [{ name: `${g.side[0].toUpperCase() + g.side.slice(1)} to ${B.name}`, color: "#c9a227", visibility: CONST.REGION_VISIBILITY.LAYER, shapes: [rectShape(A, g.gate)], flags: { [ID]: { gate: { kind: "gate", to: B.id, side: g.side } } } }]);
+      await gate.createEmbeddedDocuments("RegionBehavior", [{ name: `To ${B.name}`, type: "teleportToken", system: { destinations: [land.uuid], placement: "relative", snap: false, choice: false, revealed: true, transition: { type: "fade", duration: 800 } } }]);
+      gates++;
+    }
+  }
+  return { sheets: sheets.length, gates };
+}
+Hooks.on("deleteScene", (scene, opts, userId) => { if (userId === game.user.id && game.user.isGM && scene.getFlag(ID, "state")?.frame) linkSheets().catch(e => console.warn(`${ID} | gates`, e)); });
+
 /** A pin on the World Map that opens the sheet. */
 async function linkOnMap(scene, frame, g) {
   const map = game.scenes.get(g.meta.sceneId); if (!map) return;
@@ -276,10 +330,12 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
           <button type="button" data-do="survey" ${here?.grid?.type >= 2 && !isSheet && w.origin ? "" : "disabled"}>Survey this map</button>
         </div>
         <p>${isMap ? "Pick hexes with the Pick Hexes tool, then:" : "Open the World Map to pick hexes."}</p>
-        <div class="lss-row"><input type="text" id="lss-name" placeholder="Sheet name" ${isMap ? "" : "disabled"}><button type="button" data-do="make" ${isMap ? "" : "disabled"}>Make a sheet from ${picked.size} picked hex${picked.size === 1 ? "" : "es"}</button></div>
+        <div class="lss-row"><input type="text" id="lss-name" placeholder="Region name, e.g. Redthorn Hills" ${isMap ? "" : "disabled"}><button type="button" data-do="make" ${isMap ? "" : "disabled"}>Make a sheet from ${picked.size} picked hex${picked.size === 1 ? "" : "es"}</button></div>
       </section>
       <section><h3>This sheet</h3>
         <div class="lss-row"><button type="button" data-do="refresh" ${isSheet ? "" : "disabled"}>Redraw this sheet</button><button type="button" data-do="refreshAll">Redraw all sheets</button></div>
+        <p>Sheets live in the ${SHEET_FOLDER} folder. Where sheets meet, a strip along the edge carries tokens onto the next sheet.</p>
+        <div class="lss-row"><button type="button" data-do="link">Link sheets at their edges</button><button type="button" data-do="organize">Tidy sheets into the folder</button></div>
         <p>The party has seen about ${exploredArea()} square miles. Carrying exploration reads what the players' characters have revealed on every sheet, then shows it on every sheet and the World Map.</p>
         <div class="lss-row"><button type="button" data-do="explore">Carry exploration everywhere</button></div>
         <p>Paste data copied from the Survey Sheet, then apply it. Copy current sheet gives you data to paste back into the sheet.</p>
@@ -305,6 +361,8 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
       if (ui.controls.tool?.name === "pickHexes") ui.controls.activate({ control: "notes", tool: "select" });   /* leave the pick tool so pins can be dragged again */
       return `Made ${r.name}.`;
     }, true));
+    on('[data-do="link"]', () => run(async () => { const r = await linkSheets(); return `${r.gates} gate${r.gates === 1 ? "" : "s"} between ${r.sheets} sheet${r.sheets === 1 ? "" : "s"}.`; }));
+    on('[data-do="organize"]', () => run(async () => { const r = await organizeSheets(); return `${r.moved} sheet${r.moved === 1 ? "" : "s"} moved into ${r.folder}.`; }, true));
     on('[data-do="refresh"]', () => run(async () => { const r = await renderSheet(canvas.scene, { force: true }); return `Redrawn (${Math.round((r.map.bytes || 0) / 1024)} KB).`; }));
     on('[data-do="refreshAll"]', () => run(async () => { let n = 0; for (const s of sheetScenes()) { await renderSheet(s); n++; } return `Checked ${n} sheet${n === 1 ? "" : "s"}.`; }));
     on('[data-do="explore"]', () => run(async () => { const r = await syncExploration(); return `Read ${r.harvested} changed area${r.harvested === 1 ? "" : "s"}; revealed on ${r.restored.filter(x => x[1]).length} scene${r.restored.filter(x => x[1]).length === 1 ? "" : "s"}.`; }, true));
@@ -372,6 +430,7 @@ for (const hook of ["canvasReady", "canvasPan", "drawNote", "refreshNote", "crea
 /* ---------- start ---------- */
 Hooks.once("init", () => {
   game.settings.register(ID, "world", { scope: "world", config: false, type: Object, default: WORLD_DEFAULT });
+  game.settings.register(ID, "sheetNav", { name: "Show sheets in the navigation bar", hint: "Off keeps the bar to the World Map and the active sheet; sheets stay in the Overland Sheets folder of the Scenes tab.", scope: "world", config: true, type: Boolean, default: false, onChange: () => organizeSheets().catch(() => {}) });
   game.settings.register(ID, "survey", { scope: "world", config: false, type: Object, default: null });
   game.settings.register(ID, "explored", { scope: "world", config: false, type: Object, default: { version: 1, chunks: {}, harvested: {} } });
 });
@@ -381,7 +440,7 @@ Hooks.on("getSceneControlButtons", controls => {
   controls.notes.tools.surveySheet = { name: "surveySheet", title: "Survey Sheet", icon: "fa-solid fa-map-location-dot", button: true, order: 99, onChange: () => new SheetPanel().render(true) };
 });
 Hooks.once("ready", () => {
-  game.modules.get(ID).api = { applySheet, exportSheet, createSheet, renderSheet, surveyWorldMap, setWorldOrigin, harvestScene, restoreScene, syncExploration, exploredArea, renderMap, world, picked, PPM, CELL };
+  game.modules.get(ID).api = { applySheet, exportSheet, createSheet, renderSheet, linkSheets, organizeSheets, surveyWorldMap, setWorldOrigin, harvestScene, restoreScene, syncExploration, exploredArea, renderMap, world, picked, PPM, CELL };
   /* the active GM quietly keeps the world record up to date from whatever sheet the party is on */
   if (game.user.isGM) setInterval(() => { const s = game.scenes.active; if (s?.getFlag(ID, "state")?.frame && game.users.activeGM?.isSelf) harvestScene(s).catch(() => {}); }, 120000);
 });
