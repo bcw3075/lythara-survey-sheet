@@ -254,17 +254,17 @@ async function partyFollowMarker(marker, pos) {
   const members = sheets.flatMap(s => s.tokens.filter(t => ids.has(t.actorId)).map(t => ({ t, s })));
   const target = here.find(s => members.some(m => m.s === s)) ?? here.find(s => s.active) ?? here.slice().sort((a, b) => near(a) - near(b))[0];
   const dest = toScene(target, w.x, w.y);
-  /* party tokens first: one on every covering sheet, none elsewhere */
+  /* members keep their offsets from the party token on their own sheet (or from their centre), measured before anything moves */
+  const groups = [...new Set(members.map(m => m.s))].map(s => { const toks = members.filter(m => m.s === s).map(m => m.t), anchor = s.tokens.find(t => t.actorId === party.id); return { s, toks, c: anchor ? tokenCentre(anchor) : centroid(toks), from: toks.map(t => tokenCentre(t)) }; });
+  /* party tokens: one on every covering sheet, none elsewhere */
   await syncPartyTokens(w, party);
-  /* members keep their offsets from the party token on their own sheet (or from their centre) */
-  for (const s of new Set(members.map(m => m.s))) {
-    const toks = members.filter(m => m.s === s).map(m => m.t), anchor = s.tokens.find(t => t.actorId === party.id), c = anchor ? tokenCentre(anchor) : centroid(toks);
+  for (const { s, toks, c, from } of groups) {
     if (s === target) {
-      const updates = toks.map(t => { const tc = tokenCentre(t); return { _id: t.id, ...placeAt(t, { x: dest.x + tc.x - c.x, y: dest.y + tc.y - c.y }) }; });
+      const updates = toks.map((t, i) => { const tc = from[i]; return { _id: t.id, ...placeAt(t, { x: dest.x + tc.x - c.x, y: dest.y + tc.y - c.y }) }; });
       await s.updateEmbeddedDocuments("Token", updates, { animate: false, [ID]: { [SYNC]: true } });
     } else {
       const k = (target.grid.size ?? PPM) / (s.grid.size ?? PPM);
-      const creates = toks.map(t => { const d = t.toObject(); delete d._id; const tc = tokenCentre(t); Object.assign(d, placeAt(d, { x: dest.x + (tc.x - c.x) * k, y: dest.y + (tc.y - c.y) * k }, target)); return d; });
+      const creates = toks.map((t, i) => { const d = t.toObject(); delete d._id; const tc = from[i]; Object.assign(d, placeAt(d, { x: dest.x + (tc.x - c.x) * k, y: dest.y + (tc.y - c.y) * k }, target)); return d; });
       await target.createEmbeddedDocuments("Token", creates, { [ID]: { [SYNC]: true } });
       await s.deleteEmbeddedDocuments("Token", toks.map(t => t.id), { [ID]: { [SYNC]: true } });
       const owners = game.users.filter(u => u.active && !u.isGM && toks.some(t => t.actor?.testUserPermission(u, "OWNER")));
