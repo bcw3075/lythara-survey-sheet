@@ -41,7 +41,7 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40 }) {
     let dx = (n1 - .5) * .34, dy = (n2 - .5) * .34;
     dx += (n3 - .5) * .05; dy += (n1 - .5) * .03 + (n3 - .5) * .03;
     const fx = wx * FT_PER_MI, fy = wy * FT_PER_MI;
-    dx += (fbm(fx / 38, fy / 38, 3, s + 301) - .5) * 24 / FT_PER_MI; dy += (fbm(fx / 38, fy / 38, 3, s + 307) - .5) * 24 / FT_PER_MI;
+    dx += ((fbm(fx / 60, fy / 60, 3, s + 301) - .5) * 70 + (fbm(fx / 16, fy / 16, 3, s + 303) - .5) * 34 + (fbm(fx / 5, fy / 5, 2, s + 305) - .5) * 8) / FT_PER_MI; dy += ((fbm(fx / 60, fy / 60, 3, s + 307) - .5) * 70 + (fbm(fx / 16, fy / 16, 3, s + 309) - .5) * 34 + (fbm(fx / 5, fy / 5, 2, s + 311) - .5) * 8) / FT_PER_MI;
     const i = Math.floor((wx + dx) * inv) - land.i0, j = Math.floor(land.j1 - (wy + dy) * inv);
     if (i < 0 || j < 0 || i >= GW || j >= GH) return T.rough;
     return T_[j * GW + i];
@@ -143,7 +143,8 @@ export const ENC_STYLES = {
 };
 
 /** Draw a planned encounter map. pxSq: pixels per 5-ft square. Returns the canvas. */
-export function drawEncounter(plan, styleName = "story", pxSq = 100) {
+export function drawEncounter(plan, styleName = "story", pxSq = 100, layers = "all") {
+  if (styleName === "real") return drawReal(plan, pxSq, layers);
   const st = ENC_STYLES[styleName], ppf = pxSq / SQ_FT, w = Math.round(plan.Wft * ppf), h = Math.round(plan.Hft * ppf);
   const cv = document.createElement("canvas"); cv.width = w; cv.height = h; const c = cv.getContext("2d");
   const img = c.createImageData(w, h), buf = new Uint32Array(img.data.buffer);
@@ -281,4 +282,192 @@ function traceZero(c, F, fw, fh, ppf) {
     if (pts.length === 4) { c.moveTo(pts[2][0] * ppf, pts[2][1] * ppf); c.lineTo(pts[3][0] * ppf, pts[3][1] * ppf); }
   }
   c.stroke();
+}
+
+/* ---------- realistic painting (the "real" style, grown out of "painted") ----------
+   Colour varies, not just brightness; grass and litter are drawn blade by blade and leaf by leaf; canopies are hundreds of
+   lit leaf clusters with soft cast shadows; water shows the bed through the shallows, flows, and foams at the edges.
+   layers: "all" (one image), "ground" (no canopies; for the map) or "canopy" (canopies only, transparent; for an overhead tile). */
+const ihash = (x, y) => { let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+const sm = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const REAL = {
+  [T.fields]: [[112, 122, 58], [160, 150, 86]], [T.rough]: [[100, 112, 52], [146, 140, 78]], [T.woods]: [[88, 72, 44], [66, 80, 38]], [T.old]: [[66, 54, 34], [50, 64, 32]],
+  [T.damp]: [[80, 98, 54], [112, 116, 70]], [T.hills]: [[136, 126, 88], [116, 120, 68]], [T.bad]: [[96, 88, 82], [80, 74, 70]], [T.crag]: [[138, 134, 126], [112, 110, 104]], [T.snow]: [[232, 234, 236], [214, 220, 226]]
+};
+const GRASS = ["rgba(74,92,36,.55)", "rgba(98,118,46,.55)", "rgba(128,140,62,.5)", "rgba(170,160,92,.5)", "rgba(150,132,74,.45)", "rgba(112,124,58,.5)"];
+const LITTER = ["rgba(150,96,42,.55)", "rgba(176,128,52,.5)", "rgba(122,78,40,.55)", "rgba(196,158,72,.45)", "rgba(98,72,44,.5)"];
+
+export function drawReal(plan, pxSq = 100, layers = "all") {
+  const ppf = pxSq / SQ_FT, w = Math.round(plan.Wft * ppf), h = Math.round(plan.Hft * ppf);
+  const cv = document.createElement("canvas"); cv.width = w; cv.height = h; const c = cv.getContext("2d");
+  const fw = Math.ceil(plan.Wft) + 2, fh = Math.ceil(plan.Hft) + 2, TF = new Uint8Array(fw * fh), EF = new Float32Array(fw * fh), WF = new Float32Array(fw * fh), RF = new Float32Array(fw * fh);
+  for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) { const k = j * fw + i, p = plan.W(i, j); TF[k] = plan.terrainAt(p.x, p.y); WF[k] = plan.waterAt(i, j); RF[k] = plan.roadAt(i, j);
+    const fx = p.x * FT_PER_MI, fy = p.y * FT_PER_MI; EF[k] = plan.elevAt(p.x, p.y) + (fbm(fx / 30, fy / 30, 3, plan.land.s + 41) - .5) * 5 - Math.max(0, WF[k] + 1) * 2.4; }
+  const bil = (A, u, v) => { const i = Math.max(0, Math.min(fw - 2, Math.floor(u))), j = Math.max(0, Math.min(fh - 2, Math.floor(v))), a = u - i, b = v - j, k = j * fw + i; return (A[k] * (1 - a) + A[k + 1] * a) * (1 - b) + (A[k + fw] * (1 - a) + A[k + fw + 1] * a) * b; };
+  const tAt = (u, v) => { const i0 = Math.max(0, Math.min(fw - 2, Math.floor(u))), j0 = Math.max(0, Math.min(fh - 2, Math.floor(v))), fa = u - i0, fb = v - j0, k0 = j0 * fw + i0;
+    const q = [TF[k0], TF[k0 + 1], TF[k0 + fw], TF[k0 + fw + 1]], wq = [(1 - fa) * (1 - fb), fa * (1 - fb), (1 - fa) * fb, fa * fb]; let t = q[0], best = -1;
+    for (const a of q) { let s = 0; for (let n = 0; n < 4; n++) if (q[n] === a) s += wq[n]; if (s > best) { best = s; t = a; } } return t; };
+  const ox = plan.x0 * FT_PER_MI, oy = plan.y1 * FT_PER_MI;
+  /* overall flow direction of the water, for streaks */
+  let fa = 0; { const wl = plan.lines.find(l => l.kind === "creek" || l.kind === "river"); if (wl && wl.pts.length > 1) { const a = wl.pts[0], b = wl.pts[wl.pts.length - 1]; fa = Math.atan2(b.v - a.v, b.u - a.u); } }
+  const ca = Math.cos(fa), sa = Math.sin(fa);
+  if (layers !== "canopy") {
+    const img = c.createImageData(w, h), buf = new Uint32Array(img.data.buffer);
+    for (let py = 0; py < h; py++) {
+      const v = py / ppf;
+      for (let px = 0; px < w; px++) {
+        const u = px / ppf, t = tAt(u, v), gx = ox + u, gy = oy - v;
+        const pal = REAL[t] ?? REAL[T.rough], nA = tbl(gx / 16, gy / 16), nB = tbl(gx / 5 + 11, gy / 5 + 29), n2 = tbl(gx / 2.3 + 40, gy / 2.3 + 17), n3 = tbl(gx / .7 + 9, gy / .7 + 3);
+        let col = mixc(pal[0], pal[1], sm(.3, .7, nA * .65 + nB * .35));
+        /* bare earth showing through grass */
+        if (t === T.fields || t === T.rough || t === T.hills) { const dd = tbl(gx / 4.5 + 3, gy / 4.5 + 7) * .6 + n2 * .4; col = mixc(col, [122, 100, 66], sm(.62, .74, dd) * .75);
+          col = mixc(col, [86, 104, 44], sm(.5, .72, tbl(gx / 2.2 + 31, gy / 2.2 + 13)) * .45); }
+        /* moss on the forest floor */
+        if (t === T.woods || t === T.old) col = mixc(col, [58, 78, 34], sm(.55, .7, tbl(gx / 7 + 5, gy / 7 + 2)) * .7);
+        const sl = (bil(EF, u - 1.5, v) - bil(EF, u + 1.5, v) + bil(EF, u, v - 1.5) - bil(EF, u, v + 1.5)) * 1.4;
+        let d = (n3 - .5) * 14 + (ihash(gx * 10, gy * 10) - .5) * 18 + sl * 6;
+        const wa = bil(WF, u, v), rd = bil(RF, u, v);
+        if (rd < 6.5) { const e = sm(6.5, 4.8, rd); col = mixc(col, mixc([138, 116, 82], [118, 98, 70], n2), e); if (Math.abs(rd - 2.6) < .7) d -= 18 * e; if (ihash(gx * 4, gy * 4) > .93) d += 24 * e; }
+        if (wa > -.55 && wa <= 0) { /* wet mud and pebbles on the banks */
+          const m = sm(-.55, -.1, wa); col = mixc(col, mixc([104, 88, 62], [82, 70, 52], m), m * .9);
+        }
+        if (wa > 0) {
+          const along = gx * ca - gy * sa, across = gx * sa + gy * ca, z = Math.min(1, wa);
+          col = mixc([112, 98, 68], [62, 98, 98], sm(0, .35, z)); col = mixc(col, [30, 62, 72], sm(.35, .9, z));
+          const st1 = tbl(along / 9, across / .7), st2 = tbl(along / 3 + 7, across / .4 + 3);
+          d = (st1 - .5) * 16 + (st2 - .5) * 10 + (1 - z) * 6;
+          if (st1 > .7) d += (st1 - .7) * 110 * (1 - z * .5);
+          if (z < .1) d += (n3 > .5 ? 40 : 20) * (1 - z / .1);
+        }
+        buf[py * w + px] = (255 << 24 | (Math.max(0, Math.min(255, col[2] + d)) << 16) | (Math.max(0, Math.min(255, col[1] + d)) << 8) | Math.max(0, Math.min(255, col[0] + d))) >>> 0;
+      }
+    }
+    c.putImageData(img, 0, 0);
+    c.lineCap = "round"; c.lineJoin = "round";
+    /* grass blades and forest litter on fine world lattices, batched by colour */
+    const gB = GRASS.map(() => new Path2D()), lB = LITTER.map(() => new Path2D()), twig = new Path2D();
+    const s = plan.land.s, fx0 = Math.floor((ox - 2) / 1.1), fx1 = Math.ceil((ox + plan.Wft + 2) / 1.1), fy0 = Math.floor((oy - plan.Hft - 2) / 1.1), fy1 = Math.ceil((oy + 2) / 1.1);
+    for (let gy = fy1; gy >= fy0; gy--) for (let gx = fx0; gx <= fx1; gx++) {
+      const u0 = gx * 1.1 - ox, v0 = oy - gy * 1.1; if (u0 < -1 || v0 < -1 || u0 > plan.Wft + 1 || v0 > plan.Hft + 1) continue;
+      const t = tAt(u0, v0), wa = bil(WF, u0, v0), rd = bil(RF, u0, v0); if (wa > -.3 || rd < 5) continue;
+      if (t === T.fields || t === T.rough || t === T.hills || t === T.damp) {
+        const dens = t === T.hills ? 3 : t === T.fields ? 6 : 7;
+        for (let n = 0; n < dens; n++) { const r1 = hash(gx, gy, s + 1000 + n), r2 = hash(gx, gy, s + 1010 + n), r3 = hash(gx, gy, s + 1020 + n);
+          const x = (u0 + r1 * 1.1) * ppf, y = (v0 + r2 * 1.1) * ppf, L = (.6 + r3 * 1.0) * ppf, an = -1.9 + (r3 - .5) * 1.1 + (r1 - .5) * .5, p = gB[(r2 * GRASS.length) | 0];
+          p.moveTo(x, y); p.quadraticCurveTo(x + Math.cos(an) * L * .5 + L * .15, y + Math.sin(an) * L * .5, x + Math.cos(an) * L, y + Math.sin(an) * L); }
+      } else if (t === T.woods || t === T.old) {
+        for (let n = 0; n < 3; n++) { const r1 = hash(gx, gy, s + 1100 + n), r2 = hash(gx, gy, s + 1110 + n), r3 = hash(gx, gy, s + 1120 + n);
+          if (r3 < .2) continue; const x = (u0 + r1 * 1.1) * ppf, y = (v0 + r2 * 1.1) * ppf, a = r3 * 6.28, rl = (.2 + r3 * .22) * ppf, p = lB[(r1 * LITTER.length) | 0];
+          p.moveTo(x + Math.cos(a) * rl, y + Math.sin(a) * rl); p.ellipse(x, y, rl, rl * .55, a, 0, 6.3); }
+        if (hash(gx, gy, s + 1130) < .05) { const x = (u0 + .5) * ppf, y = (v0 + .5) * ppf, a = hash(gx, gy, s + 1131) * 6.28, L = (.8 + hash(gx, gy, s + 1132) * 1.4) * ppf; twig.moveTo(x, y); twig.lineTo(x + Math.cos(a) * L, y + Math.sin(a) * L); twig.lineTo(x + Math.cos(a + .5) * L * 1.3, y + Math.sin(a + .5) * L * 1.3); }
+      }
+    }
+    c.lineWidth = Math.max(1, ppf * .13); GRASS.forEach((col, i) => { c.strokeStyle = col; c.stroke(gB[i]); });
+    LITTER.forEach((col, i) => { c.fillStyle = col; c.fill(lB[i]); });
+    c.strokeStyle = "rgba(52,38,24,.7)"; c.lineWidth = Math.max(1, ppf * .1); c.stroke(twig);
+    /* ferns */
+    for (const q of plan.feats.tufts) if (q.kind === "fern") {
+      const x = q.u * ppf, y = q.v * ppf, n = 6;
+      for (let a = 0; a < n; a++) { const an = a / n * 6.283 + q.r * 3, L = (1.3 + hash(a, Math.round(q.r * 999), 5) * .7) * ppf, ex = x + Math.cos(an) * L, ey = y + Math.sin(an) * L;
+        c.strokeStyle = "rgba(58,92,34,.9)"; c.lineWidth = Math.max(1, ppf * .08); c.beginPath(); c.moveTo(x, y); c.lineTo(ex, ey); c.stroke();
+        c.strokeStyle = a % 2 ? "rgba(96,132,52,.8)" : "rgba(78,116,44,.8)"; c.lineWidth = Math.max(1, ppf * .1); c.beginPath();
+        for (let k = 1; k < 7; k++) { const f = k / 7, bx = x + (ex - x) * f, by = y + (ey - y) * f, ll = L * .22 * (1 - f * .7); c.moveTo(bx, by); c.lineTo(bx + Math.cos(an + 1.1) * ll, by + Math.sin(an + 1.1) * ll); c.moveTo(bx, by); c.lineTo(bx + Math.cos(an - 1.1) * ll, by + Math.sin(an - 1.1) * ll); }
+        c.stroke(); }
+    }
+    else if (q.kind === "flower") { const x = q.u * ppf, y = q.v * ppf; c.fillStyle = q.r < .4 ? "rgba(244,240,226,.9)" : q.r < .7 ? "rgba(232,198,74,.9)" : "rgba(184,138,200,.9)"; for (let k = 0; k < 4; k++) { c.beginPath(); c.arc(x + (hash(k, Math.round(q.r * 999), 8) - .5) * ppf * .8, y + (hash(k, Math.round(q.r * 999), 9) - .5) * ppf * .8, ppf * .14, 0, 7); c.fill(); } }
+    /* pebbles on the wet banks */
+    { const P1 = new Path2D(), P2 = new Path2D(), H = new Path2D(), S = .9, gx0 = Math.floor((ox - 2) / S), gx1 = Math.ceil((ox + plan.Wft + 2) / S), gy0 = Math.floor((oy - plan.Hft - 2) / S), gy1 = Math.ceil((oy + 2) / S);
+      for (let gy = gy1; gy >= gy0; gy--) for (let gx = gx0; gx <= gx1; gx++) { const u = gx * S - ox + hash(gx, gy, s + 1201) * S, v = oy - gy * S + hash(gx, gy, s + 1202) * S, wa = bil(WF, u, v);
+        if (wa < -.4 || wa > .12 || hash(gx, gy, s + 1203) > .55) continue; const r = (.12 + hash(gx, gy, s + 1204) * .28) * ppf, x = u * ppf, y = v * ppf, P = hash(gx, gy, s + 1205) < .5 ? P1 : P2;
+        P.moveTo(x + r, y); P.ellipse(x, y, r, r * .78, hash(gx, gy, s + 1206) * 3, 0, 6.3); H.moveTo(x - r * .25 + r * .3, y - r * .3); H.arc(x - r * .25, y - r * .3, r * .3, 0, 6.3); }
+      c.fillStyle = "rgba(146,138,124,.95)"; c.fill(P1); c.fillStyle = "rgba(118,108,94,.95)"; c.fill(P2); c.fillStyle = "rgba(220,214,200,.45)"; c.fill(H); }
+    /* rocks */
+    for (const r of plan.feats.rocks) realRock(c, r.u * ppf, r.v * ppf, r.r * ppf, r.seed);
+    /* deadfall */
+    for (const g of plan.feats.logs) realLog(c, g.u * ppf, g.v * ppf, g.len * ppf, g.w * ppf, g.ang, g.u * 7 + g.v);
+    /* trunks and root flare, seen when the canopy above fades */
+    for (const t of plan.feats.trees) { const x = t.u * ppf, y = t.v * ppf, r = Math.max(t.trunk, .5) * ppf;
+      c.fillStyle = "rgba(10,8,4,.35)"; c.beginPath(); c.arc(x + r * .3, y + r * .35, r * 1.5, 0, 7); c.fill();
+      const g = c.createRadialGradient(x - r * .3, y - r * .3, r * .1, x, y, r * 1.2); g.addColorStop(0, "#7a6046"); g.addColorStop(.7, "#4e3a26"); g.addColorStop(1, "#2a1f14"); c.fillStyle = g;
+      c.beginPath(); for (let k = 0; k < 9; k++) { const a = k / 9 * 6.283, rr = r * (k % 2 ? 1 : 1.35); k ? c.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr) : c.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); } c.closePath(); c.fill(); }
+  }
+  if (layers !== "ground") {
+    /* undergrowth then canopies, small first so big crowns sit on top */
+    for (const b of plan.feats.brush) realCanopy(c, b.u * ppf, b.v * ppf, b.r * ppf, hex(b.t === T.damp ? "#6c7e44" : "#4f5c2a"), b.u * 13 + b.v * 7, ppf, .7);
+    const trees = plan.feats.trees.slice().sort((a, b) => a.R - b.R);
+    for (const t of trees) {
+      const x = t.u * ppf, y = t.v * ppf, R = t.R * ppf, col = hex(t.col);
+      if (t.kind === "pine" || t.kind === "hemlock") realConifer(c, x, y, R, col, t.seed, ppf);
+      else { realCanopy(c, x, y, R, col, t.seed, ppf, 1); if (t.kind === "willow") willowStrands(c, x, y, R, col, t.seed, ppf); }
+    }
+  }
+  if (layers === "all") { c.strokeStyle = "rgba(20,20,10,.09)"; c.lineWidth = Math.max(1, pxSq / 70); c.beginPath(); for (let i = 0; i <= plan.cols; i++) { c.moveTo(i * pxSq + .5, 0); c.lineTo(i * pxSq + .5, h); } for (let j = 0; j <= plan.rows; j++) { c.moveTo(0, j * pxSq + .5); c.lineTo(w, j * pxSq + .5); } c.stroke(); }
+  return cv;
+}
+
+/* a small seeded generator for per-tree draws (the lattice hash is fine for places, but its sequences correlate and draw spirals) */
+function rng(seed) { let a = (Math.imul(seed | 0, 2654435761) ^ 0x9e3779b9) >>> 0; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+/* foliage that reads at close range: the overland's darkest greens are lifted toward a living mid-green */
+const liftDark = col => { const m = (col[0] + col[1] + col[2]) / 3; return m < 75 ? mixc(col, [86, 100, 48], .45 * (75 - m) / 40 + .2) : col; };
+function jitter(col, k, a) { return [col[0] + (hash(k, 1, a) - .5) * 26, col[1] + (hash(k, 2, a) - .5) * 26, col[2] + (hash(k, 3, a) - .5) * 18]; }
+function realCanopy(c, x, y, R, col, seed, ppf, scale) {
+  const r_ = rng(Math.round(seed * 9973) + 17), Rft = R / ppf; col = liftDark(col);
+  c.save(); c.shadowColor = "rgba(0,0,0,.55)"; c.shadowBlur = R * .5; c.shadowOffsetX = R * .34; c.shadowOffsetY = R * .4;
+  c.fillStyle = shade(col, -48); c.beginPath(); c.arc(x, y, R * .86, 0, 7); c.fill(); c.restore();
+  /* leaf dabs on a dome, each lit by its slope toward the north-west sun; deepest first so the top of the crown sits above */
+  const leaf = Math.max(.32, Math.min(.6, Rft * .045)), N = Math.round((40 + 3.1 * (Rft / leaf) ** 2 * .55) * scale), dabs = [], Lx = -.52, Ly = -.56, Lz = .64;
+  for (let i = 0; i < N; i++) {
+    const a = r_() * 6.283, d = Math.pow(r_(), .6) * 1.02, nz = Math.sqrt(Math.max(0, 1 - Math.min(1, d) ** 2)), lum = Math.cos(a) * d * Lx + Math.sin(a) * d * Ly + nz * Lz;
+    dabs.push({ dx: Math.cos(a) * d, dy: Math.sin(a) * d, nz, lum, r: (.7 + r_() * .9) * leaf * ppf, rot: r_() * 3.14, j: [r_() - .5, r_() - .5, r_() - .5, r_() - .5], g: r_() });
+  }
+  dabs.sort((p, q) => p.nz - q.nz);
+  for (const p of dabs) {
+    const base = [col[0] + p.j[0] * 16, col[1] + p.j[1] * 16, col[2] + p.j[2] * 10], lit = Math.max(-30, -32 + p.lum * 70 + p.j[3] * 14 - (p.nz < .25 ? 8 : 0));
+    c.fillStyle = shade(base, lit); c.beginPath(); c.ellipse(x + p.dx * R, y + p.dy * R, Math.max(1.2, p.r * 1.25), Math.max(1, p.r * .8), p.rot, 0, 7); c.fill();
+  }
+  c.fillStyle = shade(col, 62); c.globalAlpha = .45;
+  for (const p of dabs) if (p.lum > .62 && p.g < .35) { c.beginPath(); c.arc(x + p.dx * R - p.r * .3, y + p.dy * R - p.r * .3, Math.max(.8, p.r * .35), 0, 7); c.fill(); }
+  c.globalAlpha = 1;
+}
+function realConifer(c, x, y, R, col, seed, ppf) {
+  const key = Math.round(seed * 97) | 0, r_ = rng(Math.round(seed * 9973) + 29); col = liftDark(col);
+  c.save(); c.shadowColor = "rgba(0,0,0,.5)"; c.shadowBlur = R * .4; c.shadowOffsetX = R * .32; c.shadowOffsetY = R * .38; c.fillStyle = shade(col, -60); c.beginPath(); c.arc(x, y, R * .8, 0, 7); c.fill(); c.restore();
+  for (let layer = 0; layer < 3; layer++) {
+    const n = 14 + layer * 3, sc = 1 - layer * .26;
+    for (let i = 0; i < n; i++) {
+      const a = i / n * 6.283 + r_() * .4 + layer * .3, L = R * sc * (.85 + r_() * .18), wd = R * .17 * sc, lit = -(Math.cos(a) + Math.sin(a)) * 14 + layer * 20 - 30;
+      const ex = x + Math.cos(a) * L, ey = y + Math.sin(a) * L, nx = -Math.sin(a) * wd, ny = Math.cos(a) * wd;
+      c.fillStyle = shade(jitter(col, i + layer * 40, key), lit); c.beginPath(); c.moveTo(x + nx, y + ny); c.quadraticCurveTo(x + (ex - x) * .6 + nx * .9, y + (ey - y) * .6 + ny * .9, ex, ey); c.quadraticCurveTo(x + (ex - x) * .6 - nx * .9, y + (ey - y) * .6 - ny * .9, x - nx, y - ny); c.closePath(); c.fill();
+      c.strokeStyle = shade(col, lit + 30); c.lineWidth = Math.max(1, ppf * .06); c.beginPath();
+      for (let k = 2; k < 9; k++) { const f = k / 9, bx = x + (ex - x) * f, by = y + (ey - y) * f, ll = wd * (1 - f) * 1.1; c.moveTo(bx, by); c.lineTo(bx + Math.cos(a + .9) * ll, by + Math.sin(a + .9) * ll); c.moveTo(bx, by); c.lineTo(bx + Math.cos(a - .9) * ll, by + Math.sin(a - .9) * ll); }
+      c.stroke();
+    }
+  }
+  c.fillStyle = shade(col, 30); c.beginPath(); c.arc(x - R * .05, y - R * .06, R * .12, 0, 7); c.fill();
+}
+function willowStrands(c, x, y, R, col, seed, ppf) {
+  const r_ = rng(Math.round(seed * 9973) + 41); c.lineWidth = Math.max(1, ppf * .05); c.globalAlpha = .32;
+  for (let i = 0; i < 110; i++) { const a = r_() * 6.283, d0 = R * (.7 + r_() * .25), L = R * (.12 + r_() * .2); c.strokeStyle = shade(col, -(Math.cos(a) + Math.sin(a)) * 18 - 6);
+    c.beginPath(); c.moveTo(x + Math.cos(a) * d0, y + Math.sin(a) * d0); c.quadraticCurveTo(x + Math.cos(a + .1) * (d0 + L * .6), y + Math.sin(a + .1) * (d0 + L * .6), x + Math.cos(a + .05) * (d0 + L), y + Math.sin(a + .05) * (d0 + L)); c.stroke(); }
+  c.globalAlpha = 1;
+}
+function realRock(c, x, y, R, seed) {
+  const key = Math.round(seed * 999), pts = [];
+  for (let k = 0; k < 9; k++) { const a = k / 9 * 6.283 + seed * 3, rr = R * (.75 + .3 * hash(k, key, 3)); pts.push([x + Math.cos(a) * rr, y + Math.sin(a) * rr * .85]); }
+  const poly = () => { c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.closePath(); };
+  c.save(); c.shadowColor = "rgba(0,0,0,.45)"; c.shadowBlur = R * .5; c.shadowOffsetX = R * .3; c.shadowOffsetY = R * .35; c.fillStyle = "#5a5650"; poly(); c.fill(); c.restore();
+  const g = c.createRadialGradient(x - R * .35, y - R * .4, R * .1, x, y, R * 1.1); g.addColorStop(0, "#b8b2a6"); g.addColorStop(.55, "#8a857b"); g.addColorStop(1, "#4e4a44"); c.fillStyle = g; poly(); c.fill();
+  c.fillStyle = "rgba(84,104,48,.45)"; c.beginPath(); c.ellipse(x - R * .1, y - R * .35, R * .5, R * .25, -.3, 0, 7); c.fill();
+  c.strokeStyle = "rgba(40,36,32,.55)"; c.lineWidth = Math.max(1, R * .05); c.beginPath(); c.moveTo(x - R * .4, y + R * .1); c.lineTo(x + R * .05, y - R * .1); c.lineTo(x + R * .35, y + R * .25); c.stroke();
+}
+function realLog(c, x, y, L, W, ang, seed) {
+  const dx = Math.cos(ang) * L / 2, dy = Math.sin(ang) * L / 2, nx = -Math.sin(ang), ny = Math.cos(ang);
+  c.save(); c.shadowColor = "rgba(0,0,0,.45)"; c.shadowBlur = W * .6; c.shadowOffsetX = W * .35; c.shadowOffsetY = W * .4;
+  c.strokeStyle = "#3a2a1a"; c.lineWidth = W; c.lineCap = "round"; c.beginPath(); c.moveTo(x - dx, y - dy); c.lineTo(x + dx, y + dy); c.stroke(); c.restore();
+  const g = c.createLinearGradient(x - nx * W / 2, y - ny * W / 2, x + nx * W / 2, y + ny * W / 2); g.addColorStop(0, "#8a6a48"); g.addColorStop(.45, "#5e4630"); g.addColorStop(1, "#2e2216");
+  c.strokeStyle = g; c.lineWidth = W * .92; c.beginPath(); c.moveTo(x - dx, y - dy); c.lineTo(x + dx, y + dy); c.stroke();
+  c.strokeStyle = "rgba(30,20,12,.5)"; c.lineWidth = Math.max(1, W * .05);
+  for (let k = 0; k < 5; k++) { const o = (k / 4 - .5) * W * .7, s = .1 + hash(k, Math.round(seed), 4) * .2; c.beginPath(); c.moveTo(x - dx * (1 - s) + nx * o, y - dy * (1 - s) + ny * o); c.lineTo(x + dx * (1 - s * 1.5) + nx * o, y + dy * (1 - s * 1.5) + ny * o); c.stroke(); }
+  c.fillStyle = "rgba(84,110,46,.5)"; c.beginPath(); c.ellipse(x - dx * .2 - nx * W * .2, y - dy * .2 - ny * W * .2, L * .18, W * .25, ang, 0, 7); c.fill();
+  c.fillStyle = "#b08a5a"; c.beginPath(); c.ellipse(x + dx, y + dy, W * .2, W * .46, ang, 0, 7); c.fill(); c.strokeStyle = "rgba(90,60,30,.6)"; c.beginPath(); c.ellipse(x + dx, y + dy, W * .1, W * .24, ang, 0, 7); c.stroke();
 }
