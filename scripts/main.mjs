@@ -213,15 +213,30 @@ async function markerFollow(scene, moved) {
   const toks = partyOn(scene, party); if (!toks.length) return;
   const g = mapGeometry(), c = centroid(toks, moved), w = toMiles(scene, c.x, c.y), at = g.toMap(w);
   let marker = map.tokens.find(t => t.actorId === party.id);
-  if (!marker) { const data = (await party.getTokenDocument({ x: 0, y: 0 })).toObject(); Object.assign(data, placeAt(data, at, map)); await map.createEmbeddedDocuments("Token", [data], { [ID]: { [SYNC]: true } }); return; }
-  const pos = placeAt(marker, at);
-  if (Math.abs(pos.x - marker.x) < 1 && Math.abs(pos.y - marker.y) < 1) return;
-  await marker.update(pos, { animate: false, [ID]: { [SYNC]: true } });
+  if (!marker) { const data = (await party.getTokenDocument({ x: 0, y: 0 })).toObject(); Object.assign(data, placeAt(data, at, map)); await map.createEmbeddedDocuments("Token", [data], { [ID]: { [SYNC]: true } }); }
+  else { const pos = placeAt(marker, at); if (Math.abs(pos.x - marker.x) >= 1 || Math.abs(pos.y - marker.y) >= 1) await marker.update(pos, { animate: false, [ID]: { [SYNC]: true } }); }
+  if (scene.tokens.some(t => t.actorId === party.id)) await syncPartyTokens(w, party, scene);   /* the party token moved: every other sheet covering the spot gets it too */
 }
 /** Put a fresh party token on a sheet at a scene point. */
 async function placeParty(scene, party, at) {
   const data = (await party.getTokenDocument({ x: 0, y: 0 })).toObject(); Object.assign(data, placeAt(data, at, scene));
   await scene.createEmbeddedDocuments("Token", [data], { [ID]: { [SYNC]: true } });
+}
+/* a scene point inside one of this sheet's gate strips: a party token put there would be bounced to the next sheet */
+const inGate = (scene, p) => scene.regions.some(r => r.getFlag(ID, "gate")?.kind === "gate" && r.shapes.some(sh => sh.type === "rectangle" && p.x >= sh.x && p.x <= sh.x + sh.width && p.y >= sh.y && p.y <= sh.y + sh.height));
+/** The party token is on every sheet whose ground holds the party's world point, and on no other. origin is a sheet already right. */
+async function syncPartyTokens(w, party, origin) {
+  for (const s of sheetScenes()) {
+    if (s === origin) continue;
+    const own = s.tokens.filter(t => t.actorId === party.id), covers = inFrame(s.getFlag(ID, "state").frame, w);
+    if (!covers) { if (own.length) await s.deleteEmbeddedDocuments("Token", own.map(t => t.id), { [ID]: { [SYNC]: true } }); continue; }
+    const at = toScene(s, w.x, w.y);
+    if (inGate(s, at)) continue;
+    if (!own.length) { await placeParty(s, party, at); continue; }
+    const pos = placeAt(own[0], at);
+    if (Math.abs(pos.x - own[0].x) >= 1 || Math.abs(pos.y - own[0].y) >= 1) await own[0].update(pos, { animate: false, [ID]: { [SYNC]: true } });
+    if (own.length > 1) await s.deleteEmbeddedDocuments("Token", own.slice(1).map(t => t.id), { [ID]: { [SYNC]: true } });
+  }
 }
 /** When a sheet is made, the party token appears on it if the party's marker is inside the frame. */
 async function placePartyOnNewSheet(scene) {
@@ -255,6 +270,7 @@ async function partyFollowMarker(marker, pos) {
     if (owners.length) await target.pullUsers?.(owners);
   }
   if (!target.tokens.some(t => t.actorId === party.id)) await placeParty(target, party, dest);   /* the sheet always carries the party token itself */
+  await syncPartyTokens(w, party, target);
 }
 Hooks.on("updateToken", (tok, change, opts) => {
   if (!isActiveGM() || opts?.[ID]?.[SYNC] || !("x" in change || "y" in change)) return;
