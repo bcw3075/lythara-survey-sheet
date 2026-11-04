@@ -200,17 +200,18 @@ Hooks.on("deleteScene", (scene, opts, userId) => { if (userId === game.user.id &
 const SYNC = "sync", isActiveGM = () => game.users.activeGM?.id === game.user.id;
 const partyActor = () => game.actors.find(a => a.type === "party" && a.members?.length) ?? game.actors.find(a => a.type === "party");
 const memberIds = party => new Set((party?.members ?? []).map(m => m.id));
-const tokenCentre = t => ({ x: t.x + (t.width ?? 1) * (t.parent.grid.sizeX ?? t.parent.grid.size) / 2, y: t.y + (t.height ?? 1) * (t.parent.grid.sizeY ?? t.parent.grid.size) / 2 });
+/* pos may carry the new x/y from an update's change, which on the client that started a drag can be ahead of the document */
+const tokenCentre = (t, pos = t) => ({ x: (pos.x ?? t.x) + (t.width ?? 1) * (t.parent.grid.sizeX ?? t.parent.grid.size) / 2, y: (pos.y ?? t.y) + (t.height ?? 1) * (t.parent.grid.sizeY ?? t.parent.grid.size) / 2 });
 const placeAt = (t, c, scene = t.parent) => ({ x: Math.round(c.x - (t.width ?? 1) * (scene.grid.sizeX ?? scene.grid.size) / 2), y: Math.round(c.y - (t.height ?? 1) * (scene.grid.sizeY ?? scene.grid.size) / 2) });
 /* the party on a sheet: its party token if it has one, else its members' tokens */
 const partyOn = (scene, party) => { const own = scene.tokens.filter(t => t.actorId === party.id); return own.length ? own : scene.tokens.filter(t => memberIds(party).has(t.actorId)); };
 const travellersOn = (scene, party) => scene.tokens.filter(t => t.actorId === party.id || memberIds(party).has(t.actorId));
-const centroid = toks => { const c = toks.map(tokenCentre); return { x: c.reduce((a, p) => a + p.x, 0) / c.length, y: c.reduce((a, p) => a + p.y, 0) / c.length }; };
-async function markerFollow(scene) {
+const centroid = (toks, moved) => { const c = toks.map(t => tokenCentre(t, moved?.id === t.id ? moved : t)); return { x: c.reduce((a, p) => a + p.x, 0) / c.length, y: c.reduce((a, p) => a + p.y, 0) / c.length }; };
+async function markerFollow(scene, moved) {
   const party = partyActor(), meta = survey(); if (!party || !meta?.sceneId) return;
   const map = game.scenes.get(meta.sceneId); if (!map) return;
   const toks = partyOn(scene, party); if (!toks.length) return;
-  const g = mapGeometry(), c = centroid(toks), w = toMiles(scene, c.x, c.y), at = g.toMap(w);
+  const g = mapGeometry(), c = centroid(toks, moved), w = toMiles(scene, c.x, c.y), at = g.toMap(w);
   let marker = map.tokens.find(t => t.actorId === party.id);
   if (!marker) { const data = (await party.getTokenDocument({ x: 0, y: 0 })).toObject(); Object.assign(data, placeAt(data, at, map)); await map.createEmbeddedDocuments("Token", [data], { [ID]: { [SYNC]: true } }); return; }
   const pos = placeAt(marker, at);
@@ -230,9 +231,9 @@ async function placePartyOnNewSheet(scene) {
   if (scene.tokens.some(t => t.actorId === party.id)) return false;
   await placeParty(scene, party, toScene(scene, w.x, w.y)); return true;
 }
-async function partyFollowMarker(marker) {
+async function partyFollowMarker(marker, pos) {
   const party = partyActor(), meta = survey(); if (!party || !meta?.sceneId || marker.parent.id !== meta.sceneId || marker.actorId !== party.id) return;
-  const g = mapGeometry(), w = g.toWorld(tokenCentre(marker));
+  const g = mapGeometry(), w = g.toWorld(tokenCentre(marker, pos));
   const sheets = sheetScenes(), here = sheets.filter(s => inFrame(s.getFlag(ID, "state").frame, w)); if (!here.length) return;   /* dropped on ground no sheet covers */
   /* which sheet to land on when several cover the spot: the one the party is on, else the active scene, else the one centred nearest */
   const near = s => { const f = s.getFlag(ID, "state").frame; return Math.hypot((f.x0 + f.x1) / 2 - w.x, (f.y0 + f.y1) / 2 - w.y); };
@@ -257,7 +258,8 @@ async function partyFollowMarker(marker) {
 }
 Hooks.on("updateToken", (tok, change, opts) => {
   if (!isActiveGM() || opts?.[ID]?.[SYNC] || !("x" in change || "y" in change)) return;
-  const task = tok.parent.getFlag(ID, "state")?.frame ? markerFollow(tok.parent) : partyFollowMarker(tok);
+  const pos = { id: tok.id, x: change.x ?? tok.x, y: change.y ?? tok.y };
+  const task = tok.parent.getFlag(ID, "state")?.frame ? markerFollow(tok.parent, pos) : partyFollowMarker(tok, pos);
   task.catch(e => console.warn(`${ID} | party marker`, e));
 });
 Hooks.on("createToken", (tok, opts) => {   /* a member arriving on a sheet through a gate */
