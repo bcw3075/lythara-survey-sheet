@@ -218,7 +218,10 @@ async function partyFollowMarker(marker) {
   const party = partyActor(), meta = survey(); if (!party || !meta?.sceneId || marker.parent.id !== meta.sceneId || marker.actorId !== party.id) return;
   const ids = memberIds(party), g = mapGeometry(), w = g.toWorld(tokenCentre(marker));
   const sheets = sheetScenes(), here = sheets.filter(s => inFrame(s.getFlag(ID, "state").frame, w)); if (!here.length) return;   /* dropped on ground no sheet covers */
-  const from = sheets.find(s => membersOn(s, ids).length), target = (from && here.includes(from)) ? from : here[0], toks = from ? membersOn(from, ids) : [];
+  /* which sheet to land on when several cover the spot: the one the party is on, else the active scene, else the one centred nearest */
+  const near = s => { const f = s.getFlag(ID, "state").frame; return Math.hypot((f.x0 + f.x1) / 2 - w.x, (f.y0 + f.y1) / 2 - w.y); };
+  const from = sheets.find(s => membersOn(s, ids).length), active = here.find(s => s.active);
+  const target = (from && here.includes(from)) ? from : active ?? here.sort((a, b) => near(a) - near(b))[0], toks = from ? membersOn(from, ids) : [];
   if (!toks.length) return;
   const c = centroid(toks), dest = toScene(target, w.x, w.y);
   if (target === from) {
