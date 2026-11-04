@@ -191,6 +191,42 @@ export async function linkSheets() {
 }
 Hooks.on("deleteScene", (scene, opts, userId) => { if (userId === game.user.id && game.user.isGM && scene.getFlag(ID, "state")?.frame) linkSheets().catch(e => console.warn(`${ID} | gates`, e)); });
 
+/* ---------- the party marker on the World Map ----------
+   A token on a sheet and a token on the World Map that share an actor are the same traveller at two scales. When the sheet
+   token moves (or arrives through a gate), the World Map token is put at the same place in the world; when the World Map
+   token is dragged to a spot inside the sheet it is on, the sheet token follows. Only the active GM does the moving. */
+const SYNC = "sync", isActiveGM = () => game.users.activeGM?.id === game.user.id;
+const tokenCentre = t => ({ x: t.x + (t.width ?? 1) * (t.parent.grid.sizeX ?? t.parent.grid.size) / 2, y: t.y + (t.height ?? 1) * (t.parent.grid.sizeY ?? t.parent.grid.size) / 2 });
+const placeAt = (t, c) => ({ x: Math.round(c.x - (t.width ?? 1) * (t.parent.grid.sizeX ?? t.parent.grid.size) / 2), y: Math.round(c.y - (t.height ?? 1) * (t.parent.grid.sizeY ?? t.parent.grid.size) / 2) });
+async function sheetTokenToMap(tok) {
+  const scene = tok.parent, meta = survey(); if (!meta?.sceneId || !tok.actorId) return;
+  const map = game.scenes.get(meta.sceneId); if (!map) return;
+  const twin = map.tokens.find(t => t.actorId === tok.actorId); if (!twin) return;
+  const g = mapGeometry(), c = tokenCentre(tok), w = toMiles(scene, c.x, c.y), at = placeAt(twin, g.toMap(w));
+  if (Math.abs(at.x - twin.x) < 1 && Math.abs(at.y - twin.y) < 1) return;
+  await twin.update(at, { animate: false, [ID]: { [SYNC]: true } });
+}
+async function mapTokenToSheet(tok) {
+  const meta = survey(); if (!meta?.sceneId || tok.parent.id !== meta.sceneId || !tok.actorId) return;
+  const g = mapGeometry(), w = g.toWorld(tokenCentre(tok));
+  for (const sheet of sheetScenes()) {
+    const twin = sheet.tokens.find(t => t.actorId === tok.actorId); if (!twin) continue;
+    if (!inFrame(sheet.getFlag(ID, "state").frame, w)) continue;      /* dragged off this sheet's ground: leave the sheet token where it is */
+    const at = placeAt(twin, toScene(sheet, w.x, w.y));
+    if (Math.abs(at.x - twin.x) < 1 && Math.abs(at.y - twin.y) < 1) continue;
+    await twin.update(at, { animate: false, [ID]: { [SYNC]: true } });
+  }
+}
+Hooks.on("updateToken", (tok, change, opts) => {
+  if (!isActiveGM() || opts?.[ID]?.[SYNC] || !("x" in change || "y" in change)) return;
+  const task = tok.parent.getFlag(ID, "state")?.frame ? sheetTokenToMap(tok) : mapTokenToSheet(tok);
+  task.catch(e => console.warn(`${ID} | marker sync`, e));
+});
+Hooks.on("createToken", (tok, opts) => {   /* a token arriving on a sheet through a gate */
+  if (!isActiveGM() || !tok.parent.getFlag(ID, "state")?.frame) return;
+  sheetTokenToMap(tok).catch(e => console.warn(`${ID} | marker sync`, e));
+});
+
 /** A pin on the World Map that opens the sheet. */
 async function linkOnMap(scene, frame, g) {
   const map = game.scenes.get(g.meta.sceneId); if (!map) return;
