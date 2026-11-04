@@ -410,32 +410,46 @@ function rng(seed) { let a = (Math.imul(seed | 0, 2654435761) ^ 0x9e3779b9) >>> 
 /* foliage that reads at close range: the overland's darkest greens are lifted toward a living mid-green */
 const liftDark = col => { const m = (col[0] + col[1] + col[2]) / 3; return m < 75 ? mixc(col, [86, 100, 48], .45 * (75 - m) / 40 + .2) : col; };
 function jitter(col, k, a) { return [col[0] + (hash(k, 1, a) - .5) * 26, col[1] + (hash(k, 2, a) - .5) * 26, col[2] + (hash(k, 3, a) - .5) * 18]; }
+/* Each crown gets its own outline: an oval stretch, a few bulges (low harmonics) and a lean off the trunk. */
+function crownShape(r_, irreg) {
+  const e = .86 + r_() * .14, rot = r_() * 6.283, h = [[2, r_() * .5 + .5], [3, r_() * .6 + .4], [5, r_() * .5]].map(([k, a]) => [k, a * irreg * (k === 5 ? .5 : 1), r_() * 6.283]);
+  const lean = [(r_() - .5) * .12, (r_() - .5) * .12];
+  const rad = th => 1 + h.reduce((s, [k, a, p]) => s + a * Math.cos(k * th + p), 0);
+  /* a point in the unit disc (angle th, fraction rho of the edge) to crown-local offsets in units of R */
+  const at = (th, rho) => { const r = rho * rad(th), x = Math.cos(th) * r, y = Math.sin(th) * r * e, c = Math.cos(rot), s = Math.sin(rot); return [x * c - y * s + lean[0], x * s + y * c + lean[1]]; };
+  return { at, rad };
+}
 function realCanopy(c, x, y, R, col, seed, ppf, scale) {
   const r_ = rng(Math.round(seed * 9973) + 17), Rft = R / ppf; col = liftDark(col);
-  c.save(); c.shadowColor = "rgba(0,0,0,.55)"; c.shadowBlur = R * .5; c.shadowOffsetX = R * .34; c.shadowOffsetY = R * .4;
-  c.fillStyle = shade(col, -48); c.beginPath(); c.arc(x, y, R * .86, 0, 7); c.fill(); c.restore();
+  const shape = crownShape(r_, scale < 1 ? .12 : .06 + r_() * .06), R2 = R * (.9 + r_() * .2);
+  /* soft shadow cast to the south-east, in the crown's own outline */
+  c.save(); c.shadowColor = "rgba(0,0,0,.55)"; c.shadowBlur = R2 * .5; c.shadowOffsetX = R2 * .34; c.shadowOffsetY = R2 * .4;
+  c.fillStyle = shade(col, -48); c.beginPath();
+  for (let k = 0; k <= 48; k++) { const [dx, dy] = shape.at(k / 48 * 6.283, .86); k ? c.lineTo(x + dx * R2, y + dy * R2) : c.moveTo(x + dx * R2, y + dy * R2); }
+  c.closePath(); c.fill(); c.restore();
   /* leaf dabs on a dome, each lit by its slope toward the north-west sun; deepest first so the top of the crown sits above */
   const leaf = Math.max(.32, Math.min(.6, Rft * .045)), N = Math.round((40 + 3.1 * (Rft / leaf) ** 2 * .55) * scale), dabs = [], Lx = -.52, Ly = -.56, Lz = .64;
   for (let i = 0; i < N; i++) {
-    const a = r_() * 6.283, d = Math.pow(r_(), .6) * 1.02, nz = Math.sqrt(Math.max(0, 1 - Math.min(1, d) ** 2)), lum = Math.cos(a) * d * Lx + Math.sin(a) * d * Ly + nz * Lz;
-    dabs.push({ dx: Math.cos(a) * d, dy: Math.sin(a) * d, nz, lum, r: (.7 + r_() * .9) * leaf * ppf, rot: r_() * 3.14, j: [r_() - .5, r_() - .5, r_() - .5, r_() - .5], g: r_() });
+    const th = r_() * 6.283, rho = Math.pow(r_(), .6) * 1.03, nz = Math.sqrt(Math.max(0, 1 - Math.min(1, rho) ** 2)), [dx, dy] = shape.at(th, rho);
+    const lum = Math.cos(th) * rho * Lx + Math.sin(th) * rho * Ly + nz * Lz;
+    dabs.push({ dx, dy, nz, lum, r: (.7 + r_() * .9) * leaf * ppf, rot: r_() * 3.14, j: [r_() - .5, r_() - .5, r_() - .5, r_() - .5], g: r_() });
   }
   dabs.sort((p, q) => p.nz - q.nz);
   for (const p of dabs) {
     const base = [col[0] + p.j[0] * 16, col[1] + p.j[1] * 16, col[2] + p.j[2] * 10], lit = Math.max(-30, -32 + p.lum * 70 + p.j[3] * 14 - (p.nz < .25 ? 8 : 0));
-    c.fillStyle = shade(base, lit); c.beginPath(); c.ellipse(x + p.dx * R, y + p.dy * R, Math.max(1.2, p.r * 1.25), Math.max(1, p.r * .8), p.rot, 0, 7); c.fill();
+    c.fillStyle = shade(base, lit); c.beginPath(); c.ellipse(x + p.dx * R2, y + p.dy * R2, Math.max(1.2, p.r * 1.25), Math.max(1, p.r * .8), p.rot, 0, 7); c.fill();
   }
   c.fillStyle = shade(col, 62); c.globalAlpha = .45;
-  for (const p of dabs) if (p.lum > .62 && p.g < .35) { c.beginPath(); c.arc(x + p.dx * R - p.r * .3, y + p.dy * R - p.r * .3, Math.max(.8, p.r * .35), 0, 7); c.fill(); }
+  for (const p of dabs) if (p.lum > .62 && p.g < .35) { c.beginPath(); c.arc(x + p.dx * R2 - p.r * .3, y + p.dy * R2 - p.r * .3, Math.max(.8, p.r * .35), 0, 7); c.fill(); }
   c.globalAlpha = 1;
 }
 function realConifer(c, x, y, R, col, seed, ppf) {
-  const key = Math.round(seed * 97) | 0, r_ = rng(Math.round(seed * 9973) + 29); col = liftDark(col);
+  const key = Math.round(seed * 97) | 0, r_ = rng(Math.round(seed * 9973) + 29), tilt = r_() * 6.283; col = liftDark(col);
   c.save(); c.shadowColor = "rgba(0,0,0,.5)"; c.shadowBlur = R * .4; c.shadowOffsetX = R * .32; c.shadowOffsetY = R * .38; c.fillStyle = shade(col, -60); c.beginPath(); c.arc(x, y, R * .8, 0, 7); c.fill(); c.restore();
   for (let layer = 0; layer < 3; layer++) {
     const n = 14 + layer * 3, sc = 1 - layer * .26;
     for (let i = 0; i < n; i++) {
-      const a = i / n * 6.283 + r_() * .4 + layer * .3, L = R * sc * (.85 + r_() * .18), wd = R * .17 * sc, lit = -(Math.cos(a) + Math.sin(a)) * 14 + layer * 20 - 30;
+      const a = i / n * 6.283 + r_() * .55 + layer * .3, L = R * sc * (.7 + r_() * .36) * (1 + .12 * Math.cos(a - tilt)), wd = R * .17 * sc, lit = -(Math.cos(a) + Math.sin(a)) * 14 + layer * 20 - 30;
       const ex = x + Math.cos(a) * L, ey = y + Math.sin(a) * L, nx = -Math.sin(a) * wd, ny = Math.cos(a) * wd;
       c.fillStyle = shade(jitter(col, i + layer * 40, key), lit); c.beginPath(); c.moveTo(x + nx, y + ny); c.quadraticCurveTo(x + (ex - x) * .6 + nx * .9, y + (ey - y) * .6 + ny * .9, ex, ey); c.quadraticCurveTo(x + (ex - x) * .6 - nx * .9, y + (ey - y) * .6 - ny * .9, x - nx, y - ny); c.closePath(); c.fill();
       c.strokeStyle = shade(col, lit + 30); c.lineWidth = Math.max(1, ppf * .06); c.beginPath();
