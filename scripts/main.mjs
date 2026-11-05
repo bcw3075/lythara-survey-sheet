@@ -759,6 +759,53 @@ export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, 
   if (activate) await scene.activate(); else if (view) await scene.view();
   return { ok: true, scene: scene.id, name: scene.name, at, cols, rows, members, features: features.map(f => f.kind), unknown: parsed.unknown, ...drawn };
 }
+/** Grow an encounter map at one edge by some squares. The land is fixed to the world, so what is already there stays put;
+    everything placed by hand (tokens, notes, drawings, templates, lights and walls you added) is shifted with it. */
+export async function extendEncounter(scene, side, squares = 10) {
+  if (!game.user.isGM) throw new Error("Only a GM can change an encounter map.");
+  const st = scene?.getFlag(ID, "encounter"); if (!st) throw new Error("That scene is not an encounter map.");
+  side = String(side).toLowerCase(); if (!["north", "south", "east", "west"].includes(side)) throw new Error("Pick an edge: north, south, east or west.");
+  const n = Math.max(1, Math.min(60, Math.round(+squares) || 10)), mi = n * SQ_FT / FT_PER_MI, horiz = side === "east" || side === "west";
+  const cols = st.cols + (horiz ? n : 0), rows = st.rows + (horiz ? 0 : n);
+  if (cols > ENC_MAX || rows > ENC_MAX) throw new Error(`Encounter maps stop at ${ENC_MAX} squares a side.`);
+  const cx = st.cx + (side === "east" ? mi / 2 : side === "west" ? -mi / 2 : 0), cy = st.cy + (side === "north" ? mi / 2 : side === "south" ? -mi / 2 : 0);
+  const before = scene.dimensions;
+  await scene.update({ width: cols * ENC_PX, height: rows * ENC_PX });
+  await scene.setFlag(ID, "encounter", { ...scene.getFlag(ID, "encounter"), cx: +cx.toFixed(5), cy: +cy.toFixed(5), cols, rows });
+  /* the old top-left square moves by the padding change, plus the new strip when growing west or north */
+  const after = scene.dimensions, dx = after.sceneX - before.sceneX + (side === "west" ? n * ENC_PX : 0), dy = after.sceneY - before.sceneY + (side === "north" ? n * ENC_PX : 0);
+  if (dx || dy) for (const type of ["Token", "Note", "Drawing", "MeasuredTemplate", "AmbientLight", "AmbientSound", "Wall", "Tile", "Region"]) {
+    const docs = scene.getEmbeddedCollection(type)?.filter(x => !x.getFlag(ID, "enc")) ?? []; if (!docs.length) continue;
+    const ups = docs.map(x => type === "Wall" ? { _id: x.id, c: [x.c[0] + dx, x.c[1] + dy, x.c[2] + dx, x.c[3] + dy] }
+      : type === "Region" ? { _id: x.id, shapes: x.toObject().shapes.map(sh => sh.points ? { ...sh, points: sh.points.map((v, i) => v + (i % 2 ? dy : dx)) } : { ...sh, x: (sh.x ?? 0) + dx, y: (sh.y ?? 0) + dy }) }
+      : { _id: x.id, x: x.x + dx, y: x.y + dy });
+    await scene.updateEmbeddedDocuments(type, ups, { animate: false, [ID]: { [SYNC]: true } });
+  }
+  const r = await drawEncounterScene(scene);
+  return { side, squares: n, cols, rows, shifted: [dx, dy], ...r };
+}
+/** End an encounter: the party goes back to the overland at the spot where the fight was (the sheet covering it, through the
+    World Map marker), that sheet is activated, and the members' tokens on the encounter map are removed. */
+export async function returnFromEncounter(scene, { activate = true, removeTokens = true } = {}) {
+  if (!game.user.isGM) throw new Error("Only a GM can do this.");
+  const st = scene?.getFlag(ID, "encounter"); if (!st) throw new Error("That scene is not an encounter map.");
+  const party = partyActor(), meta = survey(); if (!party || !meta?.sceneId) throw new Error("No party, or no surveyed World Map.");
+  const ids = memberIds(party), toks = scene.tokens.filter(t => ids.has(t.actorId) || t.actorId === party.id), d = scene.dimensions;
+  const c = toks.length ? centroid(toks) : { x: d.sceneX + d.sceneWidth / 2, y: d.sceneY + d.sceneHeight / 2 };
+  const wmi = st.cols * SQ_FT / FT_PER_MI, hmi = st.rows * SQ_FT / FT_PER_MI, ft = 1 / ENC_PX * SQ_FT / FT_PER_MI;
+  const w = { x: st.cx - wmi / 2 + (c.x - d.sceneX) * ft, y: st.cy + hmi / 2 - (c.y - d.sceneY) * ft };
+  const map = game.scenes.get(meta.sceneId), g = mapGeometry();
+  let marker = map?.tokens.find(t => t.actorId === party.id);
+  if (!marker && map) { const data = (await party.getTokenDocument({ x: 0, y: 0 })).toObject(); Object.assign(data, placeAt(data, g.toMap(w), map)); [marker] = await map.createEmbeddedDocuments("Token", [data], { [ID]: { [SYNC]: true } }); }
+  if (!marker) throw new Error("The World Map isn't there.");
+  const pos = placeAt(marker, g.toMap(w));
+  await marker.update(pos, { animate: false, [ID]: { [SYNC]: true } });
+  await partyFollowMarker(marker, { id: marker.id, ...pos });
+  const sheet = sheetScenes().find(s => inFrame(s.getFlag(ID, "state").frame, w) && s.tokens.some(t => ids.has(t.actorId))) ?? sheetScenes().find(s => inFrame(s.getFlag(ID, "state").frame, w));
+  if (removeTokens && toks.length) await scene.deleteEmbeddedDocuments("Token", toks.map(t => t.id), { [ID]: { [SYNC]: true } });
+  if (activate) await (sheet ?? map).activate();
+  return { at: { x: +w.x.toFixed(3), y: +w.y.toFixed(3) }, to: (sheet ?? map).name, removed: removeTokens ? toks.length : 0 };
+}
 /* the party's members around the middle of the map, on open squares, in a loose ring */
 async function placeMembers(scene) {
   const party = partyActor(); if (!party) return 0;
@@ -782,6 +829,22 @@ Hooks.once("init", () => {
   game.settings.register(ID, "survey", { scope: "world", config: false, type: Object, default: null });
   game.settings.register(ID, "explored", { scope: "world", config: false, type: Object, default: { version: 1, chunks: {}, harvested: {} } });
 });
+async function askExtend() {
+  const scene = canvas.scene; if (!scene?.getFlag(ID, "encounter")) throw new Error("Open an encounter map first.");
+  const st = scene.getFlag(ID, "encounter"), D = foundry.applications.api.DialogV2;
+  const o = await D.input({ window: { title: "Extend this map" }, ok: { label: "Extend" }, content: `<p>${st.cols}×${st.rows} squares now. Everything on the map stays where it is.</p>
+    <div class="form-group"><label>Edge</label><select name="side"><option value="north">North (top)</option><option value="east" selected>East (right)</option><option value="south">South (bottom)</option><option value="west">West (left)</option></select></div>
+    <div class="form-group"><label>Squares to add</label><input type="number" name="squares" value="10" min="1" max="60"></div>` }).catch(() => null);
+  if (!o) return;
+  const note = ui.notifications.info("Extending the map… about 15 seconds.", { permanent: true });
+  try { const r = await extendEncounter(scene, o.side, o.squares); ui.notifications.info(`Now ${r.cols}×${r.rows} squares.`); } finally { ui.notifications.remove?.(note); }
+}
+async function askReturn() {
+  const scene = canvas.scene; if (!scene?.getFlag(ID, "encounter")) throw new Error("Open an encounter map first.");
+  const ok = await foundry.applications.api.DialogV2.confirm({ window: { title: "Back to the overland" }, content: "<p>Move the party back to the overland sheet at this spot, make that sheet active, and remove the party's tokens from this encounter map?</p>" }).catch(() => false);
+  if (!ok) return;
+  const r = await returnFromEncounter(scene); ui.notifications.info(`The party is back on ${r.to}.`);
+}
 /* the module's own group in the left-hand bar (GM only). It works on the notes layer, so pins stay visible and draggable
    with its Select tool. */
 const CONTROL = "lythara";
@@ -793,11 +856,13 @@ Hooks.on("getSceneControlButtons", controls => {
       select: { name: "select", title: "Select and move pins", icon: "fa-solid fa-expand", order: 1 },
       pickHexes: { name: "pickHexes", title: "Pick Hexes for a Sheet (click hexes on the World Map)", icon: "fa-solid fa-draw-polygon", order: 2, onChange: (ev, active) => setPicking(active) },
       encounterHere: { name: "encounterHere", title: "Encounter Map Here (click a spot on a sheet or the World Map)", icon: "fa-solid fa-chess-board", order: 3, onChange: (ev, active) => setEncPlacing(active) },
-      surveySheet: { name: "surveySheet", title: "Survey Sheet window", icon: "fa-solid fa-sliders", button: true, order: 4, onChange: () => new SheetPanel().render(true) }
+      extendMap: { name: "extendMap", title: "Extend this encounter map at an edge", icon: "fa-solid fa-expand-arrows-alt", button: true, order: 4, onChange: () => askExtend().catch(e => ui.notifications.error(e.message)) },
+      backOverland: { name: "backOverland", title: "Back to the overland (party returns to the sheet at this spot)", icon: "fa-solid fa-person-walking-arrow-right", button: true, order: 5, onChange: () => askReturn().catch(e => ui.notifications.error(e.message)) },
+      surveySheet: { name: "surveySheet", title: "Survey Sheet window", icon: "fa-solid fa-sliders", button: true, order: 6, onChange: () => new SheetPanel().render(true) }
     } };
 });
 Hooks.once("ready", () => {
-  game.modules.get(ID).api = { applySheet, exportSheet, createSheet, renderSheet, linkSheets, organizeSheets, placePartyOnNewSheet, createEncounter, drawEncounterScene, addEncounterNotes, surveyWorldMap, setWorldOrigin, harvestScene, restoreScene, syncExploration, exploredArea, renderMap, world, picked, PPM, CELL };
+  game.modules.get(ID).api = { applySheet, exportSheet, createSheet, renderSheet, linkSheets, organizeSheets, placePartyOnNewSheet, createEncounter, drawEncounterScene, addEncounterNotes, extendEncounter, returnFromEncounter, surveyWorldMap, setWorldOrigin, harvestScene, restoreScene, syncExploration, exploredArea, renderMap, world, picked, PPM, CELL };
   /* the active GM quietly keeps the world record up to date from whatever sheet the party is on */
   if (game.user.isGM) setInterval(() => { const s = game.scenes.active; if (s?.getFlag(ID, "state")?.frame && game.users.activeGM?.isSelf) harvestScene(s).catch(() => {}); }, 120000);
 });
