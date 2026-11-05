@@ -771,7 +771,7 @@ async function drawEncounterScene(scene) {
   if (lights.length) await scene.createEmbeddedDocuments("AmbientLight", lights);
   /* difficult terrain */
   const costs = squareCosts(plan), regions = [];
-  for (const [want, name, walk, color] of [[1, "Difficult terrain (undergrowth, shallow water)", 2, "#8a7a2a"], [2, "Deep water (greater difficult)", 3, "#2a5a8a"]]) {
+  for (const [want, name, walk, color] of [[1, "Difficult terrain (undergrowth, drifts, mud, scree, shallow water)", 2, "#8a7a2a"], [2, "Deep water (greater difficult)", 3, "#2a5a8a"]]) {
     const rects = costRects(costs, cols, rows, want); if (!rects.length) continue;
     regions.push({ name, color, visibility: CONST.REGION_VISIBILITY.LAYER, flags: { [ID]: { enc: "terrain" } },
       shapes: rects.map(r => ({ type: "rectangle", x: ox + r.i * ENC_PX, y: oy + r.j * ENC_PX, width: (r.e - r.i) * ENC_PX, height: r.h * ENC_PX, rotation: 0, hole: false })),

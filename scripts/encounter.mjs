@@ -541,9 +541,11 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
             if (pud > .62) { const e = sm(.62, .7, pud) * go; col = mixc(col, [92, 108, 104], e * .8); dAdd += (ihash(gx * 3, gy * 3) > .9 ? 26 : 6) * e; }
             else dAdd -= 8 * go;
           } else {   /* loose scree: a skin of small broken stones with dark gaps */
-            const cx_ = Math.floor(gx / 1.3), cy_ = Math.floor(gy / 1.3), hs = ihash(cx_, cy_), fu = gx / 1.3 - cx_ - .5, fv = gy / 1.3 - cy_ - .5;
-            col = mixc(col, mixc([132, 127, 118], [94, 90, 85], hs), go * (k === "stony" ? .6 : .55));
-            dAdd += ((hs - .5) * 30 + (fu * -1 + fv * -1) * 22 - (Math.max(Math.abs(fu), Math.abs(fv)) > .42 ? 30 : 0)) * go;
+            const S_ = 1.4, cx_ = Math.floor(gx / S_), cy_ = Math.floor(gy / S_), hs = ihash(cx_, cy_), h2 = ihash(cx_ + 71, cy_ - 13), h3 = ihash(cx_ - 29, cy_ + 47);
+            const fu = gx / S_ - cx_ - .5 - (h2 - .5) * .3, fv = gy / S_ - cy_ - .5 - (h3 - .5) * .3, rr = .3 + hs * .16, dd = Math.hypot(fu * (1 + h2 * .4), fv * (1 + h3 * .4));   /* rounded, uneven stones */
+            const cover = go * (k === "stony" ? .75 : .7) * (hs < .25 && k === "stony" ? 0 : 1);
+            if (dd < rr) { col = mixc(col, mixc([142, 137, 128], [100, 96, 90], h2), cover); dAdd += (-(fu + fv) * 40 + (hs - .5) * 16) * cover; }
+            else if (dd < rr + .1) dAdd -= 26 * cover;   /* the dark gap round each stone */
           } }
         if (EC) {   /* contour lines every 5 ft, darker every 25 ft, drawn a constant width whatever the slope */
           const e = bil(EC, u, v), ge = Math.hypot(bil(EC, u + .5, v) - bil(EC, u - .5, v), bil(EC, u, v + .5) - bil(EC, u, v - .5)) + 1e-4;
@@ -637,7 +639,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
       c.beginPath(); for (let k = 0; k < 9; k++) { const a = k / 9 * 6.283, rr = r * (k % 2 ? 1 : 1.35); k ? c.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr) : c.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); } c.closePath(); c.fill(); }
   }
   /* undergrowth is ground-level: it belongs to the map image, not the overhead canopy that fades */
-  if (layers !== "canopy") for (const b of plan.feats.brush) realCanopy(c, b.u * ppf, b.v * ppf, b.r * ppf, null, b.u * 13 + b.v * 7, ppf, .8, "brush", { leaf: b.leaf ?? 1, aut: b.aut ?? 0, hue: b.hue ?? 0, fresh: plan.season?.fresh ?? 0 });
+  if (layers !== "canopy") for (const b of plan.feats.brush) if (!(sea.snow > 0 && snowAt(ox + b.u, oy - b.v, b.t) > .5)) realCanopy(c, b.u * ppf, b.v * ppf, b.r * ppf, null, b.u * 13 + b.v * 7, ppf, .8, "brush", { leaf: b.leaf ?? 1, aut: b.aut ?? 0, hue: b.hue ?? 0, fresh: plan.season?.fresh ?? 0 });
   if (layers !== "ground") {
     /* canopies, small first so big crowns sit on top */
     const trees = plan.feats.trees.slice().sort((a, b) => a.R - b.R);
