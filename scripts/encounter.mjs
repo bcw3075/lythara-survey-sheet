@@ -135,12 +135,13 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     const pts = l.course.map(p => L(p.x, p.y)), near = pts.some((p, i) => i && segBoxDist(pts[i - 1], p, -pad, -pad, Wft + pad, Hft + pad) <= 0);
     if (!near) continue;
     const road_ = l.kind === "road" || l.kind === "track";
-    let fine = meander(l.course, road_ ? .04 : .16, 3, s + 900 + l.id.length).map(p => L(p.x, p.y));
-    /* close range: keep only the stretch near the map, add small bends, then round the corners off (Chaikin) so a creek curves instead of kinking */
-    fine = fine.filter((p, i, a) => { const q = a[Math.max(0, i - 1)], r = a[Math.min(a.length - 1, i + 1)]; return [p, q, r].some(z => z.u > -2500 && z.u < Wft + 2500 && z.v > -2500 && z.v < Hft + 2500); });
-    if (fine.length > 1) { const ll = fine.map(p => W(p.u, p.v)); fine = meander(ll, road_ ? .02 : .1, 3, s + 950 + l.id.length).map(p => L(p.x, p.y));
-      for (let k = 0; k < 3; k++) { const n = [fine[0]]; for (let i = 1; i < fine.length; i++) { const a = fine[i - 1], c = fine[i]; n.push({ u: a.u * .75 + c.u * .25, v: a.v * .75 + c.v * .25 }, { u: a.u * .25 + c.u * .75, v: a.v * .25 + c.v * .75 }); } n.push(fine[fine.length - 1]); fine = n; } }
-    lines.push({ id: l.id, kind: l.kind, pts: fine.filter((p, i, a) => { const q = a[Math.max(0, i - 1)], r = a[Math.min(a.length - 1, i + 1)]; return [p, q, r].some(z => z.u > -400 && z.u < Wft + 400 && z.v > -400 && z.v < Hft + 400); }) });
+    /* the sheet draws l.course itself, so stay on it: only gentle extra bends (at most ~40 ft off), corners rounded below, the close wobble in waterAt */
+    let fine = meander(l.course, road_ ? .015 : .03, 3, s + 900 + l.id.length).map(p => L(p.x, p.y));
+    /* round the corners (Chaikin, twice), only on the stretch within ~800 ft: no new bends, so the creek stays where the sheet draws it */
+    const nearSeg = (a, i, m) => (i > 0 && segBoxDist(a[i - 1], a[i], -m, -m, Wft + m, Hft + m) <= 0) || (i < a.length - 1 && segBoxDist(a[i], a[i + 1], -m, -m, Wft + m, Hft + m) <= 0);
+    fine = fine.filter((p, i, a) => nearSeg(a, i, 800));
+    if (!road_) for (let k = 0; k < 2 && fine.length > 2; k++) { const n = [fine[0]]; for (let i = 1; i < fine.length; i++) { const a = fine[i - 1], c = fine[i]; n.push({ u: a.u * .75 + c.u * .25, v: a.v * .75 + c.v * .25 }, { u: a.u * .25 + c.u * .75, v: a.v * .25 + c.v * .75 }); } n.push(fine[fine.length - 1]); fine = n; }
+    lines.push({ id: l.id, kind: l.kind, pts: fine.filter((p, i, a) => nearSeg(a, i, 400)) });
   }
   /* placed features: world miles and feet, so they stay put when the map grows */
   const FT = (features ?? []).map((f, i) => { const p = L(f.x, f.y), def = FEATURES[f.kind] ?? { r: 20 }; return { ...f, i, u: p.u, v: p.v, r: (f.r ?? def.r) * (f.size ?? 1) }; });

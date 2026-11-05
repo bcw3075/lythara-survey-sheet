@@ -464,6 +464,14 @@ async function sheetCover(scene, cx, cy, cols, rows) {
     return any ? { x0: +P.x0.toFixed(5), y1: +P.y1.toFixed(5), ppm: PPM, n: P.N, b } : null;
   } catch (e) { console.warn(`${ID} | sheet cover`, e); return null; }
 }
+/* the nearest creek or river course to a world point, within R miles: {p, d, kind} or null */
+function nearestWater(w, R) {
+  const wd = world(); let best = null;
+  for (const l of wd.lines ?? []) { if (l.kind !== "creek" && l.kind !== "river") continue; const c = lineCourse(l, wd.seed);
+    for (let i = 1; i < c.length; i++) { const a = c[i - 1], b = c[i], dx = b.x - a.x, dy = b.y - a.y, t = Math.max(0, Math.min(1, ((w.x - a.x) * dx + (w.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+      const p = { x: a.x + t * dx, y: a.y + t * dy }, d = Math.hypot(w.x - p.x, w.y - p.y); if (d <= R && (!best || d < best.d)) best = { p, d, kind: l.kind }; } }
+  return best;
+}
 async function groundAt(scene, w, cols = 40, rows = 40) {
   try {
     const plan = planEncounter(await encounterInput(w.x, w.y, 10, 10), { cx: w.x, cy: w.y, cols: 10, rows: 10 });
@@ -484,6 +492,11 @@ async function groundAt(scene, w, cols = 40, rows = 40) {
     const mixed = Object.values(target).filter(v => v >= .2).length >= 2;
     if (mixed && best.sc - best.dist * .25 > .5) for (const n of [60, 80]) { if (n <= cols) continue; const b = search(n, n); if (b.sc < best.sc - .2) { best = b; } if (best.sc - best.dist * .25 <= .5) break; }
     const pct = m => Object.entries(m).filter(([, v]) => v >= .05).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(", ");
+    /* creeks and rivers are drawn over the sheet, not in its picture: a click within ~300 ft of one is taken to mean it, and the map is
+       centred just off the water on the click's side, so the creek runs through the map with room on the bank you clicked */
+    const water = nearestWater(w, 300 / FT_PER_MI);
+    if (water) { const off = Math.min(water.d, 40 / FT_PER_MI), k = water.d > 1e-6 ? off / water.d : 0, at = { x: +(water.p.x + (w.x - water.p.x) * k).toFixed(4), y: +(water.p.y + (w.y - water.p.y) * k).toFixed(4) };
+      return { at, moved: Math.hypot(at.x - w.x, at.y - w.y), cols: best.cols, rows: best.rows, ground: pct(best.m), wanted: pct(target), water: water.kind }; }
     return { at: best.at, moved: best.dist, cols: best.cols, rows: best.rows, ground: pct(best.m), wanted: pct(target) };
   } catch (e) { console.warn(`${ID} | ground`, e); return { at: w, moved: 0, ground: "" }; }
 }
@@ -495,7 +508,7 @@ async function askEncounter(scene, w, g = {}) {
   encStyle();
   const D = foundry.applications.api.DialogV2, def = `Encounter: ${scene.name} (${w.x.toFixed(2)}, ${w.y.toFixed(2)})`;
   return D.input({ window: { title: "Encounter map here", resizable: true }, classes: ["lss-enc"], position: { width: 640, height: Math.min(window.innerHeight - 40, 760), top: 20 }, ok: { label: "Make the map" },
-    content: `<p>An encounter map centred on the spot you clicked, ${Math.abs(w.x).toFixed(2)} mi ${w.x < 0 ? "west" : "east"} and ${Math.abs(w.y).toFixed(2)} mi ${w.y < 0 ? "south" : "north"} of the world origin.</p>${g.ground ? `<p>Around your click the sheet shows <b>${esc(g.wanted)}</b>. Best match nearby: <b>${esc(g.ground)}</b>${g.moved > .005 ? `, ${Math.round(g.moved * FT_PER_MI)} ft from your click` : ""}${g.cols && g.cols !== 40 ? `, on a ${g.cols}×${g.rows} map so it all fits` : ""}.</p>` : ""}
+    content: `<p>An encounter map centred on the spot you clicked, ${Math.abs(w.x).toFixed(2)} mi ${w.x < 0 ? "west" : "east"} and ${Math.abs(w.y).toFixed(2)} mi ${w.y < 0 ? "south" : "north"} of the world origin.</p>${g.ground ? `<p>Around your click the sheet shows <b>${esc(g.wanted)}</b>. Best match nearby: <b>${esc(g.ground)}</b>${g.water ? `. The ${g.water} you clicked runs through it` : ""}${g.moved > .005 ? `, ${Math.round(g.moved * FT_PER_MI)} ft from your click` : ""}${g.cols && g.cols !== 40 ? `, on a ${g.cols}×${g.rows} map so it all fits` : ""}.</p>` : ""}
       <div class="form-group"><label>Name</label><input type="text" name="name" value="${esc(def)}"></div>
       <div class="form-group"><label>Squares across</label><input type="number" name="cols" value="${g.cols ?? 40}" min="10" max="${ENC_MAX}" step="1"></div>
       <div class="form-group"><label>Squares down</label><input type="number" name="rows" value="${g.rows ?? 40}" min="10" max="${ENC_MAX}" step="1"></div>
