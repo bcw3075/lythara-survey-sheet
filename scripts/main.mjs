@@ -613,10 +613,50 @@ function costRects(costs, cols, rows, want) {
   for (const r of runs) { const up = out.find(o => o.i === r.i && o.e === r.e && o.j + o.h === r.j); if (up) up.h++; else out.push({ ...r }); }
   return out;
 }
+/* ---------- the calendar: where in the year and the day we are ----------
+   Simple Calendar (Reborn) when it is running, so Lythara's own months and seasons count; the coldest day is the middle of
+   its Winter season. Without it, the Gregorian year with the coldest day on 20 January. */
+function calendarNow() {
+  const SC = globalThis.SimpleCalendar?.api, wt = game.time.worldTime;
+  try {
+    const d = SC?.timestampToDate?.(wt), months = SC?.getAllMonths?.(), seasons = SC?.getAllSeasons?.();
+    if (d && months?.length) {
+      const len = months.map(m => m.numberOfDays), total = len.reduce((a, b) => a + b, 0), doy = (m, day) => len.slice(0, m).reduce((a, b) => a + b, 0) + day;
+      const iw = seasons?.findIndex(x => /winter/i.test(x.name)) ?? -1;
+      let cold = 20;
+      if (iw >= 0) { const w = seasons[iw], nx = seasons[(iw + 1) % seasons.length], a = doy(w.startingMonth, w.startingDay); let b = doy(nx.startingMonth, nx.startingDay); if (b <= a) b += total; cold = (a + (b - a) / 2) % total; }
+      const now = doy(d.month, d.day) + (d.hour + d.minute / 60) / 24;
+      return { yearFrac: (((now - cold) / total) % 1 + 1) % 1, hour: d.hour + d.minute / 60, label: d.display?.date ?? "", source: "Simple Calendar" };
+    }
+  } catch (e) { console.warn(`${ID} | calendar`, e); }
+  const t = new Date(wt * 1000), start = Date.UTC(t.getUTCFullYear(), 0, 1), doy = (t - start) / 864e5;
+  return { yearFrac: (((doy - 20) / 365) % 1 + 1) % 1, hour: t.getUTCHours() + t.getUTCMinutes() / 60, label: t.toISOString().slice(0, 10), source: "world clock" };
+}
+/* Day length from latitude and date. World y (miles north of Stoneclaim) is taken as latitude 45° at Stoneclaim, rising to
+   70° where snow reaches the sea 1,150 miles north. The solstices fall about ten days before the coldest and warmest days. */
+function sunTimes(yearFrac, y) {
+  const lat = Math.max(-80, Math.min(80, 45 + y / 1150 * 25)) * Math.PI / 180, dec = -23.44 * Math.cos(2 * Math.PI * (yearFrac + 10 / 365)) * Math.PI / 180;
+  const ch = -Math.tan(lat) * Math.tan(dec), h0 = ch <= -1 ? Math.PI : ch >= 1 ? 0 : Math.acos(ch), day = 24 * h0 / Math.PI;
+  return { sunrise: 12 - day / 2, sunset: 12 + day / 2, day };
+}
+/* Darkness at an hour: day 0, night .95, an hour of twilight either side of sunrise and sunset. */
+function darknessAt(hour, sun) {
+  if (sun.day >= 23.99) return 0; if (sun.day <= .01) return .95;
+  const tw = (h, edge) => Math.max(0, Math.min(1, (h - edge) / 1 + .5));
+  const light = Math.min(tw(hour, sun.sunrise), 1 - tw(hour, sun.sunset));
+  return +(.95 * (1 - light)).toFixed(3);
+}
+async function syncEncounterDarkness(scenes = game.scenes.filter(s => s.getFlag(ID, "encounter"))) {
+  const now = calendarNow();
+  for (const s of scenes) { const st = s.getFlag(ID, "encounter"), dk = darknessAt(now.hour, sunTimes(now.yearFrac, st.cy));
+    if (Math.abs((s.environment?.darknessLevel ?? 0) - dk) >= .02) await s.update({ "environment.darknessLevel": dk }, { [ID]: { [SYNC]: true } }); }
+}
+Hooks.on("updateWorldTime", () => { if (isActiveGM()) syncEncounterDarkness().catch(e => console.warn(`${ID} | darkness`, e)); });
+
 /** Build (or rebuild) the encounter scene's images, walls and terrain from its saved world position. */
 async function drawEncounterScene(scene) {
   const st = scene.getFlag(ID, "encounter"), { cx, cy, cols, rows, tune } = st;
-  const plan = planEncounter(await encounterInput(cx, cy, cols, rows), { cx, cy, cols, rows, tune });
+  const cal = calendarNow(), plan = planEncounter(await encounterInput(cx, cy, cols, rows), { cx, cy, cols, rows, tune, yearFrac: cal.yearFrac });
   const ground = drawEncounter(plan, "real", ENC_PX, "ground"), canopy = drawEncounter(plan, "real", ENC_PX, "canopy");
   const rev = foundry.utils.randomID(6), slot = st.slot === "a" ? "b" : "a";
   const g = await uploadCanvas(ground, `${scene.id}-enc-${slot}.webp`), c = await uploadCanvas(canopy, `${scene.id}-enc-${slot}-canopy.webp`);
@@ -647,8 +687,10 @@ async function drawEncounterScene(scene) {
       behaviors: [{ name, type: "modifyMovementCost", system: { difficulties: { walk, travel: walk } } }] });   /* PF2e tokens move with the "travel" action outside combat */
   }
   if (regions.length) await scene.createEmbeddedDocuments("Region", regions);
-  await scene.setFlag(ID, "encounter", { ...st, slot, rev });
-  return { trees: plan.feats.trees.length, brush: plan.feats.brush.length, walls: walls.length, difficult: costs.filter(v => v === 1).length, deep: costs.filter(v => v === 2).length, bytes: g.bytes + c.bytes };
+  await scene.setFlag(ID, "encounter", { ...st, slot, rev, drawnFor: cal.label, yearFrac: +cal.yearFrac.toFixed(4) });
+  await syncEncounterDarkness([scene]);
+  const sea = plan.season;
+  return { date: cal.label, season: { warmth: +sea.T.toFixed(2), leaf: +sea.leaf.toFixed(2), autumn: +sea.autumn.toFixed(2), snow: +sea.snow.toFixed(2) }, darkness: scene.environment?.darknessLevel, trees: plan.feats.trees.length, brush: plan.feats.brush.length, walls: walls.length, difficult: costs.filter(v => v === 1).length, deep: costs.filter(v => v === 2).length, bytes: g.bytes + c.bytes };
 }
 /* where the party is in the world: its token on the active sheet, else its marker on the World Map */
 function partyWorldPoint() {
@@ -671,7 +713,7 @@ export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, 
   name = String(name ?? "").trim().slice(0, 120) || `Encounter: ${src?.name ?? "the wilds"} (${at.x.toFixed(2)}, ${at.y.toFixed(2)})`;
   const scene = await Scene.create({ name, folder: (await encFolder()).id, navigation: false, width: cols * ENC_PX, height: rows * ENC_PX, padding: 0.1,
     grid: { type: CONST.GRID_TYPES.SQUARE, size: ENC_PX, distance: SQ_FT, units: "ft", alpha: 0.18 }, tokenVision: true, fog: { mode: 2 },
-    environment: { globalLight: { enabled: true } }, flags: { [ID]: { encounter: { version: 1, cx: at.x, cy: at.y, cols, rows, from: at.from ?? null, tune: tune ?? null } } } });
+    environment: { globalLight: { enabled: true, darkness: { min: 0, max: .5 } } }, flags: { pf2e: { syncDarkness: "disabled" }, [ID]: { encounter: { version: 1, cx: at.x, cy: at.y, cols, rows, from: at.from ?? null, tune: tune ?? null } } } });
   const drawn = await drawEncounterScene(scene);
   const members = party ? await placeMembers(scene) : 0;
   if (activate) await scene.activate(); else if (view) await scene.view();
