@@ -914,7 +914,7 @@ export async function extendEncounter(scene, side, squares = 10) {
     await scene.updateEmbeddedDocuments(type, ups, { animate: false, ...movement, [ID]: { [SYNC]: true } });
   } };
   const r = await drawEncounterScene(scene, { grow: { state: { cx: +cx.toFixed(5), cy: +cy.toFixed(5), cols, rows }, dims, shift,
-    fog: { from: { width: before.sceneWidth, height: before.sceneHeight }, to: { width, height }, at: { x: side === "west" ? n * ENC_PX : 0, y: side === "north" ? n * ENC_PX : 0 } } } } });
+    fog: { from: { width: before.sceneWidth, height: before.sceneHeight }, to: { width, height }, at: { x: side === "west" ? n * ENC_PX : 0, y: side === "north" ? n * ENC_PX : 0 } } } });
   return { side, squares: n, cols, rows, shifted: [dx, dy], ...r };
 }
 /** End an encounter: the party goes back to the overland at the spot where the fight was (the sheet covering it, through the
