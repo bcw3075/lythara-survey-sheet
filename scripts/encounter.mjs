@@ -790,13 +790,20 @@ function realCanopy(c, x, y, R, col, seed, ppf, scale, kind, sea) {
 function realDeadTree(c, x, y, R, seed, ppf, style = "dead") {
   const bare = style === "bare", depthMax = bare ? 4 : 3;
   const r_ = rng(Math.round(seed * 9973) + 53), limbs = [];
-  const grow = (x0, y0, a, len, w, depth) => { const x1 = x0 + Math.cos(a) * len, y1 = y0 + Math.sin(a) * len; limbs.push([x0, y0, x1, y1, w]);
+  const tips = [];
+  const grow = (x0, y0, a, len, w, depth) => { const x1 = x0 + Math.cos(a) * len, y1 = y0 + Math.sin(a) * len; limbs.push([x0, y0, x1, y1, w]); if (depth >= depthMax - 1) tips.push([x1, y1, a]);
     if (depth < depthMax) { const n = 1 + (r_() < .7 ? 1 : 0); for (let i = 0; i < n + 1; i++) grow(x1, y1, a + (r_() - .5) * 1.3, len * (.55 + r_() * .2), w * .62, depth + 1); } };
   const n = 5 + Math.floor(r_() * 4); for (let i = 0; i < n; i++) grow(x, y, i / n * 6.283 + r_() * .6, R * (.32 + r_() * .14), Math.max(1.2, ppf * .55), 0);
   c.lineCap = "round";
   const draw = (dx, dy, col) => { for (const [a, b, e, f, w] of limbs) { c.strokeStyle = col; c.lineWidth = w; c.beginPath(); c.moveTo(a + dx, b + dy); c.lineTo(e + dx, f + dy); c.stroke(); } };
   c.save(); c.globalCompositeOperation = "multiply"; draw(R * .22, R * .26, "rgba(120,124,136,.55)"); c.restore();
-  if (bare) { draw(1, 1, "#2a221c"); draw(0, 0, "#6a5a4a"); } else { draw(1, 1, "#3e3833"); draw(0, 0, "#8a8178"); }
+  if (bare) {   /* a living bare crown: a haze of fine twigs over the limb tips, so a winter wood still reads as a wood from above */
+    const g = c.createRadialGradient(x, y, R * .1, x, y, R * .95); g.addColorStop(0, "rgba(74,60,46,.30)"); g.addColorStop(.7, "rgba(80,66,52,.22)"); g.addColorStop(1, "rgba(80,66,52,0)");
+    c.fillStyle = g; c.beginPath(); c.arc(x, y, R * .95, 0, 6.3); c.fill();
+    c.strokeStyle = "rgba(78,64,50,.55)"; c.lineWidth = Math.max(.6, ppf * .07); c.beginPath();
+    for (const [tx, ty, a] of tips) for (let k = 0; k < 4; k++) { const b = a + (r_() - .5) * 2.2, l = R * (.05 + r_() * .1); c.moveTo(tx, ty); c.lineTo(tx + Math.cos(b) * l, ty + Math.sin(b) * l); }
+    c.stroke();
+    draw(1, 1, "#2a221c"); draw(0, 0, "#6a5a4a"); } else { draw(1, 1, "#3e3833"); draw(0, 0, "#8a8178"); }
   c.lineWidth = Math.max(1, ppf * .2); c.strokeStyle = bare ? "rgba(150,132,112,.45)" : "rgba(200,192,180,.5)"; for (const [a, b, e, f, w] of limbs) if (w > ppf * .3) { c.beginPath(); c.moveTo(a - 1, b - 1); c.lineTo(e - 1, f - 1); c.stroke(); }
   const tr = Math.max(2, ppf * .9); c.fillStyle = "#5e554c"; c.beginPath(); c.arc(x, y, tr, 0, 7); c.fill(); c.fillStyle = "#9a9086"; c.beginPath(); c.arc(x - tr * .25, y - tr * .25, tr * .55, 0, 7); c.fill();
 }

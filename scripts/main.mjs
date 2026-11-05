@@ -467,7 +467,7 @@ async function sheetCover(scene, cx, cy, cols, rows) {
 /* the nearest creek or river course to a world point, within R miles: {p, d, kind} or null */
 function nearestWater(w, R) {
   const wd = world(); let best = null;
-  for (const l of wd.lines ?? []) { if (l.kind !== "creek" && l.kind !== "river") continue; const c = lineCourse(l, wd.seed);
+  for (const l of wd.lines ?? []) { if (!["creek", "river", "road", "track"].includes(l.kind)) continue; const c = lineCourse(l, wd.seed);
     for (let i = 1; i < c.length; i++) { const a = c[i - 1], b = c[i], dx = b.x - a.x, dy = b.y - a.y, t = Math.max(0, Math.min(1, ((w.x - a.x) * dx + (w.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
       const p = { x: a.x + t * dx, y: a.y + t * dy }, d = Math.hypot(w.x - p.x, w.y - p.y); if (d <= R && (!best || d < best.d)) best = { p, d, kind: l.kind }; } }
   return best;
@@ -492,10 +492,10 @@ async function groundAt(scene, w, cols = 40, rows = 40) {
     const mixed = Object.values(target).filter(v => v >= .2).length >= 2;
     if (mixed && best.sc - best.dist * .25 > .5) for (const n of [60, 80]) { if (n <= cols) continue; const b = search(n, n); if (b.sc < best.sc - .2) { best = b; } if (best.sc - best.dist * .25 <= .5) break; }
     const pct = m => Object.entries(m).filter(([, v]) => v >= .05).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(", ");
-    /* creeks and rivers are drawn over the sheet, not in its picture: a click within ~300 ft of one is taken to mean it, and the map is
+    /* creeks, rivers and roads are drawn over the sheet, not in its picture: a click within ~300 ft of one is taken to mean it, and the map is
        centred just off the water on the click's side, so the creek runs through the map with room on the bank you clicked */
     const water = nearestWater(w, 300 / FT_PER_MI);
-    if (water) { const off = Math.min(water.d, 40 / FT_PER_MI), k = water.d > 1e-6 ? off / water.d : 0, at = { x: +(water.p.x + (w.x - water.p.x) * k).toFixed(4), y: +(water.p.y + (w.y - water.p.y) * k).toFixed(4) };
+    if (water) { const off = Math.min(water.d, 20 / FT_PER_MI), k = water.d > 1e-6 ? off / water.d : 0, at = { x: +(water.p.x + (w.x - water.p.x) * k).toFixed(4), y: +(water.p.y + (w.y - water.p.y) * k).toFixed(4) };
       return { at, moved: Math.hypot(at.x - w.x, at.y - w.y), cols: best.cols, rows: best.rows, ground: pct(best.m), wanted: pct(target), water: water.kind }; }
     return { at: best.at, moved: best.dist, cols: best.cols, rows: best.rows, ground: pct(best.m), wanted: pct(target) };
   } catch (e) { console.warn(`${ID} | ground`, e); return { at: w, moved: 0, ground: "" }; }
