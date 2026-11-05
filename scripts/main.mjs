@@ -580,8 +580,9 @@ async function drawEncounterScene(scene) {
      each token beneath it; a fade would turn the whole canopy see-through as soon as any token stood under any tree. */
   await scene.createEmbeddedDocuments("Tile", [{ x: ox + d.sceneWidth / 2, y: oy + d.sceneHeight / 2, width: d.sceneWidth, height: d.sceneHeight, elevation: CANOPY_ELEV, texture: { src: `${c.path}?v=${rev}` },
     occlusion: { modes: [CONST.OCCLUSION_MODES.RADIAL], alpha: 0.2 }, flags: { [ID]: { enc: "canopy" } } }]);
-  /* trunks thick enough to hide behind */
-  const walls = [], N = CONST.WALL_SENSE_TYPES.NORMAL;
+  /* thick trunks block movement; they don't block sight (PF2e treats a tree as cover, and sight-blocking trunks throw
+     long black wedges across a player's view) */
+  const walls = [], N = CONST.WALL_SENSE_TYPES.NONE;
   for (const t of plan.feats.trees) { if (t.trunk < TRUNK_WALL_FT || t.u < 0 || t.v < 0 || t.u > plan.Wft || t.v > plan.Hft) continue;
     const x = ox + t.u * ppf, y = oy + t.v * ppf, r = t.trunk * ppf, pts = [...Array(6)].map((_, k) => [Math.round(x + Math.cos(k * Math.PI / 3) * r), Math.round(y + Math.sin(k * Math.PI / 3) * r)]);
     for (let k = 0; k < 6; k++) walls.push({ c: [...pts[k], ...pts[(k + 1) % 6]], move: CONST.WALL_MOVEMENT_TYPES.NORMAL, sight: N, light: N, sound: CONST.WALL_SENSE_TYPES.NONE, flags: { [ID]: { enc: "trunk" } } }); }
@@ -592,7 +593,7 @@ async function drawEncounterScene(scene) {
     const rects = costRects(costs, cols, rows, want); if (!rects.length) continue;
     regions.push({ name, color, visibility: CONST.REGION_VISIBILITY.LAYER, flags: { [ID]: { enc: "terrain" } },
       shapes: rects.map(r => ({ type: "rectangle", x: ox + r.i * ENC_PX, y: oy + r.j * ENC_PX, width: (r.e - r.i) * ENC_PX, height: r.h * ENC_PX, rotation: 0, hole: false })),
-      behaviors: [{ name, type: "modifyMovementCost", system: { difficulties: { walk } } }] });
+      behaviors: [{ name, type: "modifyMovementCost", system: { difficulties: { walk, travel: walk } } }] });   /* PF2e tokens move with the "travel" action outside combat */
   }
   if (regions.length) await scene.createEmbeddedDocuments("Region", regions);
   await scene.setFlag(ID, "encounter", { ...st, slot, rev });
