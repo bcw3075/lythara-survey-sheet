@@ -111,13 +111,18 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
      sucking mud on damp ground, loose scree on crag and stony hills. 0..1 at a world foot; the same field is drawn and costed. */
   const GOING = t => t === T.snow ? "drift" : t === T.damp ? "mud" : t === T.crag || t === T.bad ? "scree" : t === T.hills || t === T.rough ? "stony" : null;
   const goingF = (gx, gy, t) => { const k = GOING(t); if (!k) return 0;
-    const th = (k === "stony" ? .72 : .66) - tune.brush * .22, n = tbl(gx * .62 + 71, gy * .62 + 19) * .8 + tbl(gx * 2.3 + 5, gy * 2.3 + 44) * .2;   /* tbl features are ~23 units across: patches ~35 ft */
+    const th = (k === "stony" ? .8 : .66) - tune.brush * .24, n = tbl(gx * .62 + 71, gy * .62 + 19) * .8 + tbl(gx * 2.3 + 5, gy * 2.3 + 44) * .2;   /* tbl features are ~23 units across: patches ~35 ft */
     return sm(th, th + .1, n); };
   const goingAt = (u, v) => { const w = W(u, v), t = terrainAt(w.x, w.y); return { kind: GOING(t), g: goingF(w.x * FT_PER_MI, w.y * FT_PER_MI, t) }; };
   /* height in feet: the land model, plus small hummocks */
   const relief = tune.relief >= 0 ? 1 + tune.relief * 4 : 1 + tune.relief * .9;   /* x5 at the top, flattened to a tenth at the bottom */
+  /* bicubic (Catmull-Rom) through the land's height grid: bilinear has a crease at every cell edge, which the slope shading
+     showed as a straight light/dark line across the map */
+  const cr = (p0, p1, p2, p3, t) => p1 + .5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
+  const Eat = (i, j) => E[Math.max(0, Math.min(GH - 1, j)) * GW + Math.max(0, Math.min(GW - 1, i))];
   const baseElev = (wx, wy) => { const fi = wx * inv - land.i0 - .5, fj = land.j1 - wy * inv - .5, i = Math.floor(fi), j = Math.floor(fj); if (i < 0 || j < 0 || i >= GW - 1 || j >= GH - 1) return 0;
-    const u = fi - i, v = fj - j, k = j * GW + i; return (E[k] * (1 - u) + E[k + 1] * u) * (1 - v) + (E[k + GW] * (1 - u) + E[k + GW + 1] * u) * v; };
+    const u = fi - i, v = fj - j, row = jj => cr(Eat(i - 1, jj), Eat(i, jj), Eat(i + 1, jj), Eat(i + 2, jj), u);
+    return cr(row(j - 1), row(j), row(j + 1), row(j + 2), v); };
   const e0 = baseElev(cx, cy), season = Number.isFinite(yearFrac) ? seasonState(((yearFrac % 1) + 1) % 1, e0, cy) : SUMMER;
   const elevAt = (wx, wy) => { const fx = wx * FT_PER_MI, fy = wy * FT_PER_MI;
     /* rises, hollows and a ridged spine (feet), only when relief is turned up: knolls ~120 ft across, up to ~25 ft high */
@@ -129,12 +134,21 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
   for (const l of land.lines) {
     const pts = l.course.map(p => L(p.x, p.y)), near = pts.some((p, i) => i && segBoxDist(pts[i - 1], p, -pad, -pad, Wft + pad, Hft + pad) <= 0);
     if (!near) continue;
-    const fine = meander(l.course, l.kind === "road" || l.kind === "track" ? .04 : .16, 3, s + 900 + l.id.length).map(p => L(p.x, p.y));
+    const road_ = l.kind === "road" || l.kind === "track";
+    let fine = meander(l.course, road_ ? .04 : .16, 3, s + 900 + l.id.length).map(p => L(p.x, p.y));
+    /* close range: keep only the stretch near the map, add small bends, then round the corners off (Chaikin) so a creek curves instead of kinking */
+    fine = fine.filter((p, i, a) => { const q = a[Math.max(0, i - 1)], r = a[Math.min(a.length - 1, i + 1)]; return [p, q, r].some(z => z.u > -2500 && z.u < Wft + 2500 && z.v > -2500 && z.v < Hft + 2500); });
+    if (fine.length > 1) { const ll = fine.map(p => W(p.u, p.v)); fine = meander(ll, road_ ? .02 : .1, 3, s + 950 + l.id.length).map(p => L(p.x, p.y));
+      for (let k = 0; k < 3; k++) { const n = [fine[0]]; for (let i = 1; i < fine.length; i++) { const a = fine[i - 1], c = fine[i]; n.push({ u: a.u * .75 + c.u * .25, v: a.v * .75 + c.v * .25 }, { u: a.u * .25 + c.u * .75, v: a.v * .25 + c.v * .75 }); } n.push(fine[fine.length - 1]); fine = n; } }
     lines.push({ id: l.id, kind: l.kind, pts: fine.filter((p, i, a) => { const q = a[Math.max(0, i - 1)], r = a[Math.min(a.length - 1, i + 1)]; return [p, q, r].some(z => z.u > -400 && z.u < Wft + 400 && z.v > -400 && z.v < Hft + 400); }) });
   }
   /* placed features: world miles and feet, so they stay put when the map grows */
   const FT = (features ?? []).map((f, i) => { const p = L(f.x, f.y), def = FEATURES[f.kind] ?? { r: 20 }; return { ...f, i, u: p.u, v: p.v, r: (f.r ?? def.r) * (f.size ?? 1) }; });
-  const fdist = (f, u, v) => { const n = fbm((x0 * FT_PER_MI + u) / 22, (y1 * FT_PER_MI - v) / 22, 2, s + 700 + f.i * 13); return Math.hypot(u - f.u, v - f.v) / (f.r * (.78 + n * .44)); };
+  /* distance from a feature in its own radii: water gets a lobed, irregular shoreline (a few bays and points), the rest a light wobble */
+  const fdist = (f, u, v) => { const n = fbm((x0 * FT_PER_MI + u) / 22, (y1 * FT_PER_MI - v) / 22, 2, s + 700 + f.i * 13), du = u - f.u, dv = v - f.v;
+    if (f.kind !== "lake" && f.kind !== "pond") return Math.hypot(du, dv) / (f.r * (.78 + n * .44));
+    const a = Math.atan2(dv, du), h = k => hash(f.i, k, s + 731) * 6.283, lob = 1 + .16 * Math.sin(2 * a + h(1)) + .11 * Math.sin(3 * a + h(2)) + .07 * Math.sin(5 * a + h(3)) + .04 * Math.sin(8 * a + h(4));
+    return Math.hypot(du, dv) / (f.r * lob * (.62 + n * .76)); };
   const inF = (kinds, u, v, k = 1) => FT.some(f => kinds.includes(f.kind) && f.r > 0 && fdist(f, u, v) < k);
   for (const f of FT) if (f.kind === "stream") {   /* a stream across the whole map through the spot */
     const a = f.ang ?? (hash(f.i, 3, s + 711) * Math.PI), L0 = Math.max(Wft, Hft) * 1.2, pts = [];
@@ -149,6 +163,10 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
   /* water depth signal: <0 dry; 0..1 shallow edge to channel */
   function waterAt(u, v) { let w = -1; const [a, b] = wob(u, v, 9, 70, 351); for (const l of water) { const hw = halfWidth(l, u, v), d = lineDist(l, a, b); w = Math.max(w, 1 - d / hw); }
     for (const f of FT) if (f.kind === "lake" || f.kind === "pond") w = Math.max(w, (1 - fdist(f, u, v)) * (f.kind === "lake" ? 1.3 : .95) * Math.max(.4, f.size ?? 1) ** .3);
+    /* damp ground holds standing water in its hollows: a few small pools as the land is, many and wide with Water turned up, none turned down */
+    if (w < .9 && tune.water > -1) { const gx = x0 * FT_PER_MI + u, gy = y1 * FT_PER_MI - v, wp = W(u, v);
+      if (terrainAt(wp.x, wp.y) === T.damp) { const n = tbl(gx * .5 + 13, gy * .5 + 91) * .8 + tbl(gx * 1.9 + 3, gy * 1.9 + 7) * .2, th = .77 - tune.water * .12;
+        w = Math.max(w, n > th ? .02 + .6 * sm(0, 1, (n - th) / .1) : Math.max(-1, (n - th) / .04)); } }   /* shallow: wading, not swimming */
     return w; }
   /* built features step off water: the nearest dry spot within ~150 ft of where they were asked for */
   const placedB = [];
@@ -191,7 +209,9 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     if (cv > .35) return edgeTree(wx, wy, u, v, r3, r4, gx, gy, t, cv);
     const p0 = t === T.old ? .72 : t === T.woods ? .78 : t === T.damp ? .5 : t === T.rough ? .035 : t === T.hills ? .05 : t === T.fields ? .006 : 0;
     const lush = Math.max(0, -(tune.decay ?? 0)), p = t === T.snow || t === T.crag ? p0 : nudge(p0, tune.trees, t === T.fields || t === T.rough || t === T.hills ? .25 : 0) * (1 + lush * (forest(t) ? .12 : .8));
-    if (r3 >= p) return;
+    if (r3 >= p) {   /* thinned woods: about half the trees taken out leave a stump */
+      if (forest(t) && r3 < p0 && hash(gx, gy, s + 527) < .5 && clearOf(u, v, 3)) (feats.stumps ??= []).push({ u, v, r: 1 + r4 * 1.1, seed: r4 });
+      return; }
     let sp = story.speciesAt(wx, wy, t);
     for (let k = 1; !sp && forest(t) && k < 6; k++) sp = story.speciesAt(wx + k * .004, wy - k * .003, t);
     const stray = !sp;   /* the land names no tree here (extra trees from the sliders): it takes after its neighbours below */
@@ -235,6 +255,11 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     feats.rocks.push({ u, v, r: (t === T.crag || t === T.hills || t === T.snow ? 2 : 1) + r4 * (t === T.snow ? 4 : 3), seed: r4, t });
   });
   /* boulder fields: a closer lattice inside the feature */
+  /* Rocks turned up: boulder fields, clustered where a slow noise runs high (stony ground first, a few in the woods, none in the fields or water) */
+  if (tune.rocks > 0) lattice(9, 861, (wx, wy, u, v, r3, r4) => { const t = terrainAt(wx, wy); if (t === T.fields || t === T.water || t === T.damp) return;
+    const n = tbl(wx * FT_PER_MI * .45 + 21, wy * FT_PER_MI * .45 + 63), th = (forest(t) ? .74 : .66) - tune.rocks * .2;
+    if (n < th || r3 > .25 + (n - th) * 2 || waterAt(u, v) > -.25 || roadAt(u, v) < 8 || inF(["camp", "clearing", ...OPEN_FEATS], u, v)) return;
+    feats.rocks.push({ u, v, r: 1.4 + r4 * (2.4 + tune.rocks * 2.2), seed: r4, t, big: true }); });
   lattice(9, 851, (wx, wy, u, v, r3, r4) => { if (!inF(["boulders"], u, v) || r3 > .42 || waterAt(u, v) > -.2) return; feats.rocks.push({ u, v, r: 1.5 + r4 * 3.5, seed: r4, t: terrainAt(wx, wy), big: true }); });
   /* the built and shaped features, each from its own seeded generator */
   feats.outcrops = []; feats.stones = []; feats.ruins = []; feats.camps = []; feats.fallen = []; feats.caves = [];
@@ -470,6 +495,10 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
   const SL = new Float32Array(fw * fh); for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) SL[j * fw + i] = (bil(EF, i - 1.5, j) - bil(EF, i + 1.5, j) + bil(EF, i, j - 1.5) - bil(EF, i, j + 1.5)) * .8;
   const ox = plan.x0 * FT_PER_MI, oy = plan.y1 * FT_PER_MI, decayS = plan.tune?.decay ?? 0, decay = Math.max(0, decayS), rel = Math.max(0, plan.tune?.relief ?? 0), sea = plan.season ?? SUMMER, forest = t => t === T.woods || t === T.old;
   /* snow at a world foot: drifts lit from the north-west, wind ripples, scoured rocky patches. Returns colour and a shade offset. */
+  /* one stone of a loose stony skin at a world foot: cells of S ft, a jittered rounded stone in each (some cells empty) */
+  const stoneAt = (gx0, gy0, S) => { const gx = gx0 * .83 + gy0 * .56, gy = gy0 * .83 - gx0 * .56, cx_ = Math.floor(gx / S), cy_ = Math.floor(gy / S), hs = ihash(cx_, cy_), h2 = ihash(cx_ + 71, cy_ - 13), h3 = ihash(cx_ - 29, cy_ + 47);
+    const fu = gx / S - cx_ - .5 - (h2 - .5) * .36, fv = gy / S - cy_ - .5 - (h3 - .5) * .36, rr = hs < .1 ? 0 : .3 + hs * .2, dd = Math.hypot(fu * (1 + h2 * .4), fv * (1 + h3 * .4));
+    return { in: dd < rr, tone: h2, shade: (-(fu + fv) * 40 + (hs - .5) * 16) }; };
   const snowTex = (gx, gy, col) => { let d = 0;
           /* (the noise table makes features about 23 units across, so an argument of gx * 23 / F gives features F feet wide) */
           /* drifts about 40 and 15 ft across, lit from the north-west: bright windward faces, blue lee shade */
@@ -482,7 +511,8 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
           d += lit * 30 + (rip - .5) * 18;
           /* wind-scoured patches, about 50 ft, where rock and frozen scree show through */
           const sc = tbl(gx * .46 + 50, gy * .46 + 20) * .7 + tbl(gx * 3 + 9, gy * 3 + 31) * .3;
-          if (sc > .64) { const k = sm(.64, .74, sc); col = mixc(col, mixc([126, 120, 110], [86, 82, 78], ihash(gx * 3, gy * 3)), k * .85); d += (ihash(gx * 6, gy * 6) - .5) * 34 * k; }
+          if (sc > .64) { const k = sm(.64, .74, sc), st = stoneAt(gx, gy, 1.1);   /* frozen scree: rounded stones with frost-dark gaps, not grain */
+            col = mixc(col, st.in ? mixc([128, 122, 112], [92, 88, 82], st.tone) : [70, 68, 66], k * (st.in ? .85 : .6)); d += (st.in ? st.shade : -10) * k; }
           if (ihash(gx * 9, gy * 9) > .996) col = [255, 255, 255];
         
     return { col, d }; };
@@ -492,6 +522,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
   /* overall flow direction of the water, for streaks */
   let fa = 0; { const wl = plan.lines.find(l => l.kind === "creek" || l.kind === "river"); if (wl && wl.pts.length > 1) { const a = wl.pts[0], b = wl.pts[wl.pts.length - 1]; fa = Math.atan2(b.v - a.v, b.u - a.u); } }
   const ca = Math.cos(fa), sa = Math.sin(fa);
+  let SEEDC = null;
   if (layers !== "canopy") {
     const img = c.createImageData(w, h), buf = new Uint32Array(img.data.buffer);
     for (let py = 0; py < h; py++) {
@@ -511,7 +542,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
         if (sea.dormant > 0 && (t === T.woods || t === T.old)) col = mixc(col, [92, 74, 50], sea.dormant * .5);
         if (sea.fresh > 0 && (t === T.fields || t === T.rough || t === T.hills || t === T.damp)) col = mixc(col, [118, 166, 58], sea.fresh * .35);
         if (sea.autumn > 0 && (t === T.woods || t === T.old)) col = mixc(col, mixc([150, 96, 40], [120, 70, 30], n2), sea.autumn * .55 * sm(.35, .6, tbl(gx * 2 + 4, gy * 2 + 9)));
-        if (sea.snow > 0 && t !== T.snow) { const cov = snowAt(gx, gy, t);
+        if (sea.snow > 0 && t !== T.snow && t !== T.crag && t !== T.bad) { const cov = snowAt(gx, gy, t);   /* crag lays its own snow after its texture */
           if (cov > 0) { const sn = snowTex(gx, gy, mixc([222, 228, 238], [206, 214, 228], .5)); col = mixc(col, sn.col, cov); dAdd += sn.d * cov; } }
         /* decay: grass and moss go grey-brown in patches */
         if (decayS < 0 && t !== T.snow && t !== T.crag && !(sea.snow > .5)) col = mixc(col, mixc([84, 140, 46], [52, 104, 38], n2), -decayS * (.3 + .3 * sm(.3, .7, tbl(gx * .6 + 11, gy * .6 + 4))));   /* lush: deep green growth and moss, in patches */
@@ -521,10 +552,30 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
         if (t === T.snow) { const sn = snowTex(gx, gy, col); col = sn.col; dAdd += sn.d; relief = 14; }
         /* bare crag: cracked, banded stone with dark fissures and lichen */
         if (t === T.crag || t === T.bad) {
-          const band = tbl(gx * 1.1 + 2, gy * 3 + 5), fis = tbl(gx * 5 + 13, gy * 14 + 4);   /* bands ~20 ft, fissures ~4 ft */
-          col = mixc(col, [92, 90, 86], sm(.45, .75, band) * .45);
-          if (fis < .3) col = mixc(col, [48, 46, 44], (.3 - fis) / .3 * .8);
-          col = mixc(col, [150, 156, 112], sm(.66, .72, tbl(gx * 9 + 31, gy * 9 + 8)) * .35);   /* lichen ~2.5 ft */
+          /* bedded rock: blocks drawn out along the strike (~14 by 6 ft), only some joints open as dark cracks, grit in the wider ones,
+             each block a slightly different tone and tilt, lichen on some */
+          const th_ = .5 + (tbl(ox * .0004 + 9, oy * .0004 + 4) - .5) * 1.4, cs = Math.cos(th_), sn = Math.sin(th_), qx = (gx * cs + gy * sn) / 14, qy = (-gx * sn + gy * cs) / 6;
+          const ix = Math.floor(qx), iy = Math.floor(qy); let d1 = 9, d2 = 9, ia = 0, ib = 0, ja = 0, jb = 0;
+          if (!SEEDC || SEEDC.th !== th_) {   /* seed points cached per map (two hashes each, 9 cells a pixel, was the cost) */
+            const qs = [[ox, oy], [ox + plan.Wft, oy], [ox, oy - plan.Hft], [ox + plan.Wft, oy - plan.Hft]].map(([X, Y]) => [(X * cs + Y * sn) / 14, (-X * sn + Y * cs) / 6]);
+            const ax = Math.floor(Math.min(...qs.map(q => q[0]))) - 2, ay = Math.floor(Math.min(...qs.map(q => q[1]))) - 2, nx = Math.ceil(Math.max(...qs.map(q => q[0]))) + 3 - ax, ny = Math.ceil(Math.max(...qs.map(q => q[1]))) + 3 - ay;
+            const sx = new Float32Array(nx * ny), sy = new Float32Array(nx * ny);
+            for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { sx[j * nx + i] = ax + i + .15 + ihash(ax + i, ay + j) * .7; sy[j * nx + i] = ay + j + .15 + ihash(ax + i + 31, ay + j + 17) * .7; }
+            SEEDC = { th: th_, ax, ay, nx, ny, sx, sy }; }
+          const C_ = SEEDC;
+          for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) { const X = ix + a, Y = iy + b, k = (Y - C_.ay) * C_.nx + (X - C_.ax), inb = X >= C_.ax && Y >= C_.ay && X < C_.ax + C_.nx && Y < C_.ay + C_.ny;
+            const dx = qx - (inb ? C_.sx[k] : X + .15 + ihash(X, Y) * .7), dy = qy - (inb ? C_.sy[k] : Y + .15 + ihash(X + 31, Y + 17) * .7), dd = dx * dx + dy * dy;
+            if (dd < d1) { d2 = d1; ja = ia; jb = ib; d1 = dd; ia = X; ib = Y; } else if (dd < d2) { d2 = dd; ja = X; jb = Y; } }
+          const edge = (Math.sqrt(d2) - Math.sqrt(d1)) * 6, h1 = ihash(ia + 7, ib + 3), h2 = ihash(ia - 5, ib + 11), band = tbl(gx * 1.1 + 2, gy * 3 + 5);
+          const open_ = ihash(Math.min(ia, ja) * 7 + Math.max(ia, ja) * 13, Math.min(ib, jb) * 11 + Math.max(ib, jb) * 5) > .58;
+          col = mixc(col, mixc([130, 126, 117], [88, 86, 81], h1 * .4 + tbl(gx * .35 + 5, gy * .35 + 77) * .35 + sm(.45, .75, band) * .25), .8);
+          col = mixc(col, [70, 68, 64], sm(.55, .8, tbl(gx * .9 + 40, gy * .9 + 2)) * .25);   /* weathering stains */
+          dAdd += (h2 - .5) * 14 + (n3 - .5) * 8;
+          if (h1 > .78) col = mixc(col, [140, 148, 104], sm(.58, .7, tbl(gx * 9 + 31, gy * 9 + 8)) * .4);   /* lichen */
+          if (open_) { if (edge < .45) col = mixc(col, [40, 38, 36], (1 - edge / .45) * .9); else if (edge < 1.6) { dAdd -= (1.6 - edge) * 16; if (edge < .9 && ihash(gx * 2, gy * 2) > .7) col = mixc(col, [112, 104, 90], .4); } }
+          else if (edge < .2) dAdd -= 14;   /* a closed joint: a hairline */
+          if (sea.snow > 0) { const cov = Math.min(1, snowAt(gx, gy, t) * 1.1 + (open_ && edge < 1.4 ? .35 * sea.snow : 0));   /* snow lies on the rock, deepest in the open joints */
+            if (cov > 0) { const sn = snowTex(gx, gy, mixc([222, 228, 238], [206, 214, 228], .5)); col = mixc(col, sn.col, cov); dAdd = dAdd * (1 - cov) + sn.d * cov; } }
           relief = 12;
         }
         /* rough going */
@@ -536,16 +587,16 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
             col = mixc(col, [242, 245, 250], Math.min(1, go * 1.4) * .8);
             if (sh < 0) col = mixc(col, [160, 178, 212], Math.min(.55, -sh * 1.4));
             dAdd = dAdd * (1 - go) + Math.max(-10, Math.min(18, sh * 40)); relief = 3;
+          } else if (k === "mud" && sea.snow > .25) {   /* frozen hard under the snow: only a dimple shows */
+            dAdd -= 4 * go;
           } else if (k === "mud") {   /* sucking mud: dark, wet, with standing puddles that catch the sky */
             col = mixc(col, mixc([84, 66, 44], [60, 48, 34], n2), go * .85); const pud = tbl(gx * 6 + 17, gy * 6 + 9);
             if (pud > .62) { const e = sm(.62, .7, pud) * go; col = mixc(col, [92, 108, 104], e * .8); dAdd += (ihash(gx * 3, gy * 3) > .9 ? 26 : 6) * e; }
             else dAdd -= 8 * go;
-          } else {   /* loose scree: a skin of small broken stones with dark gaps */
-            const S_ = 1.4, cx_ = Math.floor(gx / S_), cy_ = Math.floor(gy / S_), hs = ihash(cx_, cy_), h2 = ihash(cx_ + 71, cy_ - 13), h3 = ihash(cx_ - 29, cy_ + 47);
-            const fu = gx / S_ - cx_ - .5 - (h2 - .5) * .3, fv = gy / S_ - cy_ - .5 - (h3 - .5) * .3, rr = .3 + hs * .16, dd = Math.hypot(fu * (1 + h2 * .4), fv * (1 + h3 * .4));   /* rounded, uneven stones */
-            const cover = go * (k === "stony" ? .75 : .7) * (hs < .25 && k === "stony" ? 0 : 1);
-            if (dd < rr) { col = mixc(col, mixc([142, 137, 128], [100, 96, 90], h2), cover); dAdd += (-(fu + fv) * 40 + (hs - .5) * 16) * cover; }
-            else if (dd < rr + .1) dAdd -= 26 * cover;   /* the dark gap round each stone */
+          } else if (!(sea.snow > 0 && t !== T.snow && snowAt(gx, gy, t) > .35)) {   /* loose scree (buried where snow lies): a skin of small broken stones with dark gaps */
+            const st = stoneAt(gx, gy, k === "stony" ? 1.3 : 1.6), cover = go * (k === "stony" ? .75 : .9) * (st.tone < .2 && k === "stony" ? 0 : 1);
+            if (st.in) { col = mixc(col, mixc([142, 137, 128], [100, 96, 90], st.tone), Math.min(1, cover * 1.3)); dAdd = dAdd * (1 - cover) + st.shade * cover; }
+            else { col = mixc(col, [72, 68, 63], cover * (k === "stony" ? .4 : .85)); dAdd -= 10 * cover; }   /* the dark grit between stones hides the bedrock */
           } }
         if (EC) {   /* contour lines every 5 ft, darker every 25 ft, drawn a constant width whatever the slope */
           const e = bil(EC, u, v), ge = Math.hypot(bil(EC, u + .5, v) - bil(EC, u - .5, v), bil(EC, u, v + .5) - bil(EC, u, v - .5)) + 1e-4;
@@ -556,11 +607,18 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
         const wa = bil(WF, u, v), rd = bil(RF, u, v);
         if (rd < 6.5) { const e = sm(6.5, 4.8, rd); col = mixc(col, mixc([138, 116, 82], [118, 98, 70], n2), e); if (Math.abs(rd - 2.6) < .7) d -= 18 * e; if (ihash(gx * 4, gy * 4) > .93) d += 24 * e; }
         if (wa > -.55 && wa <= 0) { /* wet mud and pebbles on the banks */
-          const m = sm(-.55, -.1, wa); col = mixc(col, mixc([120, 104, 74], [86, 72, 54], m), m * .9); if (wa > -.06) d -= 26;
+          const m = sm(-.55, -.1, wa) * (sea.snow > .25 ? .25 : 1); col = mixc(col, mixc([120, 104, 74], [86, 72, 54], m), m * .9); if (wa > -.06) d -= 26 * (sea.snow > .25 ? .4 : 1);   /* frozen banks lie under the snow */
         }
         if (wa > 0) {
           const along = gx * ca - gy * sa, across = gx * sa + gy * ca, z = Math.min(1, wa);
           col = mixc([110, 150, 136], [62, 112, 112], sm(0, .4, z)); col = mixc(col, [40, 74, 80], sm(.4, .95, z));
+          if (t === T.damp) col = mixc(col, mixc([92, 100, 64], [70, 80, 52], n2), .5);   /* swamp water: still, peaty, green-brown */
+          if (sea.snow > .25 && (t === T.damp || plan.inF(["lake", "pond"], u, v))) {   /* still water freezes: grey-blue ice, white cracks, snow blown across it */
+            const cr = Math.abs(tbl(gx * 1.3 + 5, gy * 1.3 + 50) - .5), cr2 = Math.abs(tbl(gx * 3.1 + 70, gy * 3.1 + 9) - .5);
+            col = mixc([196, 210, 222], [168, 186, 204], sm(.3, .7, n2)); d = (nA - .5) * 8;
+            if (cr < .007) { col = mixc(col, [234, 240, 247], .55); d += 4; }
+            const cov = sm(.45, .75, tbl(gx * .7 + 33, gy * .7 + 8)) * Math.min(1, sea.snow * 1.4); if (cov > 0) col = mixc(col, [234, 238, 245], cov * .9);
+          }
           const st1 = tbl(along / 9, across / .7), st2 = tbl(along / 3 + 7, across / .4 + 3);
           d = (st1 - .5) * 16 + (st2 - .5) * 10 + (1 - z) * 6;
           if (st1 > .74) d += (st1 - .74) * 80 * (1 - z * .5);
@@ -605,14 +663,32 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
         c.stroke(); }
     }
     else if (q.kind === "flower") { const x = q.u * ppf, y = q.v * ppf; c.fillStyle = q.r < .4 ? "rgba(244,240,226,.9)" : q.r < .7 ? "rgba(232,198,74,.9)" : "rgba(184,138,200,.9)"; for (let k = 0; k < 4; k++) { c.beginPath(); c.arc(x + (hash(k, Math.round(q.r * 999), 8) - .5) * ppf * .8, y + (hash(k, Math.round(q.r * 999), 9) - .5) * ppf * .8, ppf * .14, 0, 7); c.fill(); } }
+    /* swamp margins: reed clumps along the water's edge, lily pads on the still pools */
+    { const R1 = new Path2D(), R2 = new Path2D(), LP = new Path2D(), LF = new Path2D(), S = 1.6, gx0 = Math.floor((ox - 2) / S), gx1 = Math.ceil((ox + plan.Wft + 2) / S), gy0 = Math.floor((oy - plan.Hft - 2) / S), gy1 = Math.ceil((oy + 2) / S);
+      const dry = sea.dormant > .5 || sea.snow > .3;
+      for (let gy = gy1; gy >= gy0; gy--) for (let gx = gx0; gx <= gx1; gx++) { const u = gx * S - ox + hash(gx, gy, s + 1211) * S, v = oy - gy * S + hash(gx, gy, s + 1212) * S;
+        if (tAt(u, v) !== T.damp && !(tAt(u, v) !== T.snow && plan.inF(["lake", "pond"], u, v, 1.3))) continue; const wa = bil(WF, u, v), h = hash(gx, gy, s + 1213), x = u * ppf, y = v * ppf;
+        if (wa > -.25 && wa < .18 && h < .7) { const n = 6 + (h * 20 | 0) % 6, L = (1.2 + h * 1.6) * ppf;   /* a reed clump */
+          for (let k = 0; k < n; k++) { const a = -Math.PI / 2 + (hash(gx * 7 + k, gy, s + 1214) - .5) * 1.9, l = L * (.6 + hash(gx, gy * 7 + k, s + 1215) * .5), P = k % 2 ? R1 : R2;
+            P.moveTo(x, y); P.quadraticCurveTo(x + Math.cos(a) * l * .5, y + Math.sin(a) * l * .5, x + Math.cos(a) * l + l * .12, y + Math.sin(a) * l); } }
+        else if (wa > .2 && wa < .55 && h < .3 && !dry && tbl((ox + u) * .35 + 17, (oy - v) * .35 + 4) > .62) { const r = (.7 + h * 3) * ppf, a = h * 40;   /* a lily pad with its notch */
+          LP.moveTo(x, y); LP.arc(x, y, r, a + .35, a + 6.0); LP.closePath(); if (h < .03) { LF.moveTo(x + r * .3, y); LF.arc(x, y, r * .3, 0, 6.3); } } }
+      c.lineCap = "round"; c.lineWidth = Math.max(1, ppf * .09); c.strokeStyle = dry ? "rgba(150,128,80,.9)" : "rgba(70,96,40,.95)"; c.stroke(R1); c.strokeStyle = dry ? "rgba(128,108,68,.9)" : "rgba(104,130,56,.95)"; c.stroke(R2);
+      c.fillStyle = "rgba(78,112,52,.95)"; c.fill(LP); c.lineWidth = Math.max(1, ppf * .05); c.strokeStyle = "rgba(46,70,34,.7)"; c.stroke(LP); c.fillStyle = "rgba(240,236,230,.95)"; c.fill(LF); }
     /* pebbles on the wet banks */
     { const P1 = new Path2D(), P2 = new Path2D(), H = new Path2D(), S = .9, gx0 = Math.floor((ox - 2) / S), gx1 = Math.ceil((ox + plan.Wft + 2) / S), gy0 = Math.floor((oy - plan.Hft - 2) / S), gy1 = Math.ceil((oy + 2) / S);
       for (let gy = gy1; gy >= gy0; gy--) for (let gx = gx0; gx <= gx1; gx++) { const u = gx * S - ox + hash(gx, gy, s + 1201) * S, v = oy - gy * S + hash(gx, gy, s + 1202) * S, wa = bil(WF, u, v);
-        if (wa < -.4 || wa > .12 || hash(gx, gy, s + 1203) > .55) continue; const r = (.12 + hash(gx, gy, s + 1204) * .28) * ppf, x = u * ppf, y = v * ppf, P = hash(gx, gy, s + 1205) < .5 ? P1 : P2;
+        if (wa < -.4 || wa > .12 || hash(gx, gy, s + 1203) > .55 || tAt(u, v) === T.damp || sea.snow > .25 || plan.inF(["lake", "pond"], u, v, 1.3)) continue; const r = (.12 + hash(gx, gy, s + 1204) * .28) * ppf, x = u * ppf, y = v * ppf, P = hash(gx, gy, s + 1205) < .5 ? P1 : P2;
         P.moveTo(x + r, y); P.ellipse(x, y, r, r * .78, hash(gx, gy, s + 1206) * 3, 0, 6.3); H.moveTo(x - r * .25 + r * .3, y - r * .3); H.arc(x - r * .25, y - r * .3, r * .3, 0, 6.3); }
       c.fillStyle = "rgba(146,138,124,.95)"; c.fill(P1); c.fillStyle = "rgba(118,108,94,.95)"; c.fill(P2); c.fillStyle = "rgba(220,214,200,.45)"; c.fill(H); }
     /* rocks */
     for (const r of plan.feats.rocks) realRock(c, r.u * ppf, r.v * ppf, r.r * ppf, r.seed, r.t === T.snow || sea.snow > .4);
+    /* stumps: a cut face with rings and a dark bark rim, a short shadow */
+    for (const g of plan.feats.stumps ?? []) { const x = g.u * ppf, y = g.v * ppf, r = g.r * ppf;
+      c.fillStyle = "rgba(30,24,16,.35)"; c.beginPath(); c.ellipse(x + r * .45, y + r * .5, r * 1.05, r * .9, .6, 0, 6.3); c.fill();
+      c.fillStyle = "#4a3824"; c.beginPath(); c.arc(x, y, r, 0, 6.3); c.fill();
+      c.fillStyle = sea.snow > .3 ? "#e8ecf2" : "#b39468"; c.beginPath(); c.arc(x - r * .06, y - r * .06, r * .8, 0, 6.3); c.fill();
+      c.strokeStyle = "rgba(110,84,52,.7)"; c.lineWidth = Math.max(1, ppf * .04); for (let k = 1; k < 4; k++) { c.beginPath(); c.arc(x - r * .06 + g.seed * r * .1, y - r * .06, r * .8 * k / 4, 0, 6.3); c.stroke(); } }
     /* deadfall */
     for (const g of plan.feats.logs) realLog(c, g.u * ppf, g.v * ppf, g.len * ppf, g.w * ppf, g.ang, g.u * 7 + g.v);
     /* tree shadows: crisp, long, in the crown's outline, falling south-east (sun high in the north-west) */
