@@ -425,15 +425,43 @@ function worldPointAt(scene, p) {
    of where the tree grows. A click on a crown (not forest underneath, forest just south) is moved to the trees' ground, onto
    the wood's edge, so the map shows the edge. Also names the ground at the spot for the dialog. */
 const GROUND_NAMES = { 0: "fields", 1: "open rough ground", 2: "woods", 3: "old growth", 4: "damp low ground", 5: "water", 6: "hills", 7: "bad ground", 8: "bare crag", 9: "snowfield" };
-async function groundAt(scene, w) {
+/* Fuzzy match: what does the sheet show around the cursor, and where nearby does an encounter map have that same mix?
+   Ground is grouped as woods / snow / crag / water / open. On a sheet a spot counts as woods if a tree's crown is drawn over it
+   (crowns stand up to ~.3 mi north of their ground). Candidate centres within ~half a mile are scored on how closely the map's
+   ground mix matches, plus a little for distance; if the mix can't fit in the chosen size, bigger maps are tried. */
+const GROUP = t => t === TERRAIN.woods || t === TERRAIN.old ? "woods" : t === TERRAIN.snow ? "snow" : t === TERRAIN.crag || t === TERRAIN.bad ? "crag" : t === TERRAIN.water ? "water" : "open";
+/* the sheet picture's mix around a world point: tree green, snow white, crag grey, water blue, open tan (ink and shadow skipped) */
+const sheetImgs = new Map();
+async function sheetMix(scene, w, R) {
   try {
-    /* read the ground exactly as the encounter map will (same warp), from a small plan around the click */
-    const plan = planEncounter(await encounterInput(w.x, w.y, 10, 10), { cx: w.x, cy: w.y, cols: 10, rows: 10 }), land = { tAt: (x, y) => plan.terrainAt(x, y) };
-    const forest = t => t === TERRAIN.woods || t === TERRAIN.old;
-    let t = land.tAt(w.x, w.y), at = w, moved = 0;
-    if (scene.getFlag(ID, "state")?.frame && !forest(t)) for (let dy = .01; dy <= .4; dy += .01) if (forest(land.tAt(w.x, w.y - dy))) { at = { x: w.x, y: +(w.y - dy).toFixed(3) }; t = land.tAt(at.x, at.y); moved = dy; break; }   /* on the edge itself: half wood, half what lies north */
-    const edge = forest(t) && [[.08, 0], [-.08, 0], [0, .08], [0, -.08]].some(([a, b]) => !forest(land.tAt(at.x + a, at.y + b)));
-    return { at, moved, ground: (GROUND_NAMES[t] ?? "open ground") + (edge ? " (at the wood's edge)" : "") };
+    const src = scene.levels.contents[0]?.background?.src; if (!src) return null;
+    let img = sheetImgs.get(src); if (!img) { img = new Image(); img.src = route(src.split("?")[0]) + "?" + (src.split("?")[1] ?? ""); await img.decode(); sheetImgs.clear(); sheetImgs.set(src, img); }
+    const f = scene.getFlag(ID, "state").frame, px = (w.x - f.x0) * PPM, py = (f.y1 - w.y) * PPM, n = Math.ceil(R * PPM), N = 2 * n + 1;
+    const c = document.createElement("canvas"); c.width = c.height = N; const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(img, px - n, py - n, N, N, 0, 0, N, N);
+    const d = g.getImageData(0, 0, N, N).data, m = {}; let tot = 0;
+    for (let k = 0; k < d.length; k += 4) { const r = d[k], gg = d[k + 1], b = d[k + 2], mx = Math.max(r, gg, b), mn = Math.min(r, gg, b), L = (r + gg + b) / 3, sat = mx ? (mx - mn) / mx : 0;
+      if (L < 70) continue; const t = b > r + 12 && b >= gg - 4 ? "water" : gg >= r - 2 && gg - b > 22 ? "woods" : sat < .14 ? (L > 175 ? "snow" : "crag") : "open";
+      m[t] = (m[t] ?? 0) + 1; tot++; }
+    if (!tot) return null; for (const k in m) m[k] /= tot; return m;
+  } catch (e) { console.warn(`${ID} | sheet mix`, e); return null; }
+}
+async function groundAt(scene, w, cols = 40, rows = 40) {
+  try {
+    const plan = planEncounter(await encounterInput(w.x, w.y, 10, 10), { cx: w.x, cy: w.y, cols: 10, rows: 10 }), tAt = (x, y) => plan.terrainAt(x, y);
+    const mixOf = (fn, cx, cy, half, n) => { const m = {}; for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) { const g = fn(cx + (a / (n - 1) - .5) * 2 * half, cy + (b / (n - 1) - .5) * 2 * half); m[g] = (m[g] ?? 0) + 1 / (n * n); } return m; };
+    /* what you see: on a sheet, the picture itself around the cursor (~700 ft across); elsewhere, the land */
+    const target = (scene.getFlag(ID, "state")?.frame && await sheetMix(scene, w, .065)) || mixOf((x, y) => GROUP(tAt(x, y)), w.x, w.y, .04, 7);
+    const score = (m) => { let d = 0; for (const k of new Set([...Object.keys(m), ...Object.keys(target)])) d += Math.abs((m[k] ?? 0) - (target[k] ?? 0)); return d; };
+    const search = (c, r) => { const half = c * SQ_FT / FT_PER_MI / 2; let best = null;
+      for (let dx = -.45; dx <= .45; dx += .025) for (let dy = -.45; dy <= .45; dy += .025) { const dist = Math.hypot(dx, dy); if (dist > .45) continue;
+        const m = mixOf((x, y) => GROUP(tAt(x, y)), w.x + dx, w.y + dy, half, 6), sc = score(m) + dist * .25;
+        if (!best || sc < best.sc) best = { sc, at: { x: +(w.x + dx).toFixed(4), y: +(w.y + dy).toFixed(4) }, m, cols: c, rows: r, dist }; }
+      return best; };
+    let best = search(cols, rows);
+    const mixed = Object.values(target).filter(v => v >= .2).length >= 2;
+    if (mixed && best.sc - best.dist * .25 > .5) for (const n of [60, 80]) { if (n <= cols) continue; const b = search(n, n); if (b.sc < best.sc - .2) { best = b; } if (best.sc - best.dist * .25 <= .5) break; }
+    const pct = m => Object.entries(m).filter(([, v]) => v >= .05).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(", ");
+    return { at: best.at, moved: best.dist, cols: best.cols, rows: best.rows, ground: pct(best.m), wanted: pct(target) };
   } catch (e) { console.warn(`${ID} | ground`, e); return { at: w, moved: 0, ground: "" }; }
 }
 const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -444,10 +472,10 @@ async function askEncounter(scene, w, g = {}) {
   encStyle();
   const D = foundry.applications.api.DialogV2, def = `Encounter: ${scene.name} (${w.x.toFixed(2)}, ${w.y.toFixed(2)})`;
   return D.input({ window: { title: "Encounter map here", resizable: true }, classes: ["lss-enc"], position: { width: 640, height: Math.min(window.innerHeight - 40, 760), top: 20 }, ok: { label: "Make the map" },
-    content: `<p>An encounter map centred on the spot you clicked, ${Math.abs(w.x).toFixed(2)} mi ${w.x < 0 ? "west" : "east"} and ${Math.abs(w.y).toFixed(2)} mi ${w.y < 0 ? "south" : "north"} of the world origin.${g.ground ? ` Ground here: <b>${esc(g.ground)}</b>.` : ""}${g.moved ? ` (Moved ${Math.round(g.moved * FT_PER_MI)} ft south onto the trees you clicked; the sheet draws tree crowns above their ground.)` : ""}</p>
+    content: `<p>An encounter map centred on the spot you clicked, ${Math.abs(w.x).toFixed(2)} mi ${w.x < 0 ? "west" : "east"} and ${Math.abs(w.y).toFixed(2)} mi ${w.y < 0 ? "south" : "north"} of the world origin.</p>${g.ground ? `<p>Around your click the sheet shows <b>${esc(g.wanted)}</b>. Best match nearby: <b>${esc(g.ground)}</b>${g.moved > .005 ? `, ${Math.round(g.moved * FT_PER_MI)} ft from your click` : ""}${g.cols && g.cols !== 40 ? `, on a ${g.cols}×${g.rows} map so it all fits` : ""}.</p>` : ""}
       <div class="form-group"><label>Name</label><input type="text" name="name" value="${esc(def)}"></div>
-      <div class="form-group"><label>Squares across</label><input type="number" name="cols" value="40" min="10" max="${ENC_MAX}" step="1"></div>
-      <div class="form-group"><label>Squares down</label><input type="number" name="rows" value="40" min="10" max="${ENC_MAX}" step="1"></div>
+      <div class="form-group"><label>Squares across</label><input type="number" name="cols" value="${g.cols ?? 40}" min="10" max="${ENC_MAX}" step="1"></div>
+      <div class="form-group"><label>Squares down</label><input type="number" name="rows" value="${g.rows ?? 40}" min="10" max="${ENC_MAX}" step="1"></div>
       <div class="form-group"><label>Put the party there</label><input type="checkbox" name="party"></div>
       <div class="form-group stacked"><label>Add to the map</label><textarea name="notes" rows="2" placeholder="e.g. a pond in the north-east, a stand of dead trees, a cave entrance on the west side facing east"></textarea>
         <p class="hint">Known: lake, pond, stream, dead trees, clearing, boulders, rock outcrop, cave entrance, standing stones, ruins, campsite, fallen giant tree. Places: north, south-east, middle, edge… Anything else is kept on the scene for Claude.</p></div>
