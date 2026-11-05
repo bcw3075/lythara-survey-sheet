@@ -411,6 +411,44 @@ function setPicking(on) {
   canvas.stage.on("pointerdown", pickHandler);
 }
 
+/* ---------- placing an encounter map by clicking a spot on a sheet or the World Map ---------- */
+let encHandler = null;
+/** The world point (miles) under a click on a sheet or the World Map, or null on any other scene. */
+function worldPointAt(scene, p) {
+  if (scene?.getFlag(ID, "state")?.frame) return toMiles(scene, p.x, p.y);
+  if (isWorldMap(scene)) { const w = mapGeometry().toWorld(p); return { x: +w.x.toFixed(3), y: +w.y.toFixed(3) }; }
+  return null;
+}
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+async function askEncounter(scene, w) {
+  const D = foundry.applications.api.DialogV2, def = `Encounter: ${scene.name} (${w.x.toFixed(2)}, ${w.y.toFixed(2)})`;
+  return D.input({ window: { title: "Encounter map here" }, ok: { label: "Make the map" },
+    content: `<p>An encounter map centred on the spot you clicked, ${w.x.toFixed(2)} mi east and ${w.y.toFixed(2)} mi north of the world origin.</p>
+      <div class="form-group"><label>Name</label><input type="text" name="name" value="${esc(def)}"></div>
+      <div class="form-group"><label>Squares across</label><input type="number" name="cols" value="40" min="10" max="${ENC_MAX}" step="1"></div>
+      <div class="form-group"><label>Squares down</label><input type="number" name="rows" value="40" min="10" max="${ENC_MAX}" step="1"></div>
+      <div class="form-group"><label>Put the party there</label><input type="checkbox" name="party"></div>
+      <p class="hint">Leave the party unticked to plan ahead. The map opens for you only; players don't see it until you activate it.</p>` }).catch(() => null);
+}
+function setEncPlacing(on) {
+  if (encHandler) { canvas.stage.off("pointerdown", encHandler); encHandler = null; }
+  if (!on) return;
+  encHandler = async ev => {
+    if (ev.button !== 0 || ui.controls.tool?.name !== "encounterHere" || busy) return;
+    const scene = canvas.scene, w = worldPointAt(scene, ev.getLocalPosition(canvas.stage));
+    if (!w) return ui.notifications.warn("Click on an overland sheet or the World Map.");
+    const opts = await askEncounter(scene, w); if (!opts) return;
+    busy = true; const note = ui.notifications.info("Drawing the encounter map… about 15 seconds.", { permanent: true });
+    try {
+      const r = await createEncounter({ x: w.x, y: w.y, from: scene.id, name: opts.name, cols: opts.cols, rows: opts.rows, party: !!opts.party, view: true });
+      ui.notifications.info(`Made ${r.name}: ${r.cols}×${r.rows} squares${r.members ? `, party placed` : ""}. It's in the Encounter Maps folder.`);
+      ui.controls.activate({ control: "notes", tool: "select" });
+    } catch (e) { ui.notifications.error(e.message); console.error(e); }
+    finally { busy = false; ui.notifications.remove?.(note); }
+  };
+  canvas.stage.on("pointerdown", encHandler);
+}
+
 /* ---------- GM window ---------- */
 class SheetPanel extends foundry.applications.api.ApplicationV2 {
   static DEFAULT_OPTIONS = { id: "lss-panel", classes: ["lss-panel"], window: { title: "Survey Sheet", resizable: true }, position: { width: 480, height: "auto" } };
@@ -426,6 +464,10 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
         </div>
         <p>${isMap ? "Pick hexes with the Pick Hexes tool, then:" : "Open the World Map to pick hexes."}</p>
         <div class="lss-row"><input type="text" id="lss-name" placeholder="Region name, e.g. Redthorn Hills" ${isMap ? "" : "disabled"}><button type="button" data-do="make" ${isMap ? "" : "disabled"}>Make a sheet from ${picked.size} picked hex${picked.size === 1 ? "" : "es"}</button></div>
+      </section>
+      <section><h3>Encounter maps</h3>
+        <p>To plan one ahead, pick the Encounter Map Here tool (the chessboard, in the Notes tools) and click a spot on any sheet or the World Map. Or make one where the party is now:</p>
+        <div class="lss-row"><button type="button" data-do="encParty">Encounter map where the party is</button></div>
       </section>
       <section><h3>This sheet</h3>
         <div class="lss-row"><button type="button" data-do="refresh" ${isSheet ? "" : "disabled"}>Redraw this sheet</button><button type="button" data-do="refreshAll">Redraw all sheets</button></div>
@@ -456,6 +498,7 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
       if (ui.controls.tool?.name === "pickHexes") ui.controls.activate({ control: "notes", tool: "select" });   /* leave the pick tool so pins can be dragged again */
       return `Made ${r.name}.`;
     }, true));
+    on('[data-do="encParty"]', () => run(async () => { status("Drawing the encounter map… about 15 seconds."); const r = await createEncounter({ view: true }); return `Made ${r.name} with ${r.members} party member${r.members === 1 ? "" : "s"}. It opened for you only; activate it to bring the players.`; }));
     on('[data-do="link"]', () => run(async () => { const r = await linkSheets(); return `${r.gates} gate${r.gates === 1 ? "" : "s"} between ${r.sheets} sheet${r.sheets === 1 ? "" : "s"}.`; }));
     on('[data-do="organize"]', () => run(async () => { const r = await organizeSheets(); return `${r.moved} sheet${r.moved === 1 ? "" : "s"} moved into ${r.folder}.`; }, true));
     on('[data-do="refresh"]', () => run(async () => { const r = await renderSheet(canvas.scene, { force: true }); return `Redrawn (${Math.round((r.map.bytes || 0) / 1024)} KB).`; }));
@@ -607,10 +650,13 @@ function partyWorldPoint() {
   const meta = survey(), marker = meta?.sceneId && game.scenes.get(meta.sceneId)?.tokens.find(t => t.actorId === party.id);
   return marker ? { ...mapGeometry().toWorld(tokenCentre(marker)), from: meta.sceneId } : null;
 }
-/** Make an encounter map at a world point (default: where the party is) and put the party's members in the middle. */
-export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, activate = false } = {}) {
+/** Make an encounter map at a world point (default: where the party is). The party's members are put in the middle when the
+    map is made where the party is, or when party is true; a map planned ahead at a chosen spot leaves the party alone. */
+export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, activate = false, view = false, party } = {}) {
   if (!game.user.isGM) throw new Error("Only a GM can make an encounter map.");
-  let at = Number.isFinite(+x) && Number.isFinite(+y) ? { x: num(x, 20000), y: num(y, 20000), from } : partyWorldPoint();
+  const chosen = x !== undefined && y !== undefined && Number.isFinite(+x) && Number.isFinite(+y);
+  party ??= !chosen;
+  let at = chosen ? { x: num(x, 20000), y: num(y, 20000), from } : partyWorldPoint();
   if (!at) throw new Error("Couldn't find the party. Give a world point, or put the party token on a sheet or the World Map.");
   cols = Math.max(10, Math.min(ENC_MAX, Math.round(+cols) || 40)); rows = Math.max(10, Math.min(ENC_MAX, Math.round(+rows) || 40));
   const src = game.scenes.get(at.from);
@@ -619,8 +665,8 @@ export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, 
     grid: { type: CONST.GRID_TYPES.SQUARE, size: ENC_PX, distance: SQ_FT, units: "ft", alpha: 0.18 }, tokenVision: true, fog: { mode: 2 },
     environment: { globalLight: { enabled: true } }, flags: { [ID]: { encounter: { version: 1, cx: at.x, cy: at.y, cols, rows, from: at.from ?? null } } } });
   const drawn = await drawEncounterScene(scene);
-  const members = await placeMembers(scene);
-  if (activate) await scene.activate();
+  const members = party ? await placeMembers(scene) : 0;
+  if (activate) await scene.activate(); else if (view) await scene.view();
   return { ok: true, scene: scene.id, name: scene.name, at, cols, rows, members, ...drawn };
 }
 /* the party's members around the middle of the map, on open squares, in a loose ring */
@@ -648,6 +694,7 @@ Hooks.once("init", () => {
 });
 Hooks.on("getSceneControlButtons", controls => {
   if (!game.user.isGM || !controls.notes?.tools) return;
+  controls.notes.tools.encounterHere = { name: "encounterHere", title: "Encounter Map Here (click a spot on a sheet or the World Map)", icon: "fa-solid fa-chess-board", order: 97, onChange: (ev, active) => setEncPlacing(active) };
   controls.notes.tools.pickHexes = { name: "pickHexes", title: "Pick Hexes for a Sheet", icon: "fa-solid fa-draw-polygon", order: 98, onChange: (ev, active) => setPicking(active) };
   controls.notes.tools.surveySheet = { name: "surveySheet", title: "Survey Sheet", icon: "fa-solid fa-map-location-dot", button: true, order: 99, onChange: () => new SheetPanel().render(true) };
 });
