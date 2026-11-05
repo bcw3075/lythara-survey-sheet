@@ -81,7 +81,7 @@ export const TUNE_KEYS = ["trees", "brush", "rocks", "water", "relief", "decay"]
 const tuneOf = t => Object.fromEntries(TUNE_KEYS.map(k => [k, Math.max(-1, Math.min(1, Number(t?.[k]) || 0))]));
 /* a chance p pushed up toward 1 or down toward 0 by a slider; open ground gains a little cover too when pushed up */
 const nudge = (p, k, open = 0) => k >= 0 ? Math.min(1, p + (1 - p) * k * .85 + open * k) : p * (1 + k);
-export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFrac, features }) {
+export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFrac, features, cover }) {
   tune = tuneOf(tune);
   const Wft = cols * SQ_FT, Hft = rows * SQ_FT, wmi = Wft / FT_PER_MI, hmi = Hft / FT_PER_MI;
   const x0 = cx - wmi / 2, y1 = cy + hmi / 2;
@@ -103,6 +103,10 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     if (i < 0 || j < 0 || i >= GW || j >= GH) return T.rough;
     return T_[j * GW + i];
   }
+  /* where the sheet picture shows tree crowns (0..1, smoothed), so a click on the tree line gets the tree line */
+  const coverAt = !cover?.b ? () => 0 : (wx, wy) => { const fi = (wx - cover.x0) * cover.ppm - .5, fj = (cover.y1 - wy) * cover.ppm - .5, i = Math.floor(fi), j = Math.floor(fj), n = cover.n;
+    const at = (a, b) => a < 0 || b < 0 || a >= n || b >= n ? 0 : +(cover.b[b * n + a] === "1"), u = fi - i, v = fj - j;
+    return (at(i, j) * (1 - u) + at(i + 1, j) * u) * (1 - v) + (at(i, j + 1) * (1 - u) + at(i + 1, j + 1) * u) * v; };
   /* height in feet: the land model, plus small hummocks */
   const relief = tune.relief >= 0 ? 1 + tune.relief * 4 : 1 + tune.relief * .9;   /* x5 at the top, flattened to a tenth at the bottom */
   const baseElev = (wx, wy) => { const fi = wx * inv - land.i0 - .5, fj = land.j1 - wy * inv - .5, i = Math.floor(fi), j = Math.floor(fj); if (i < 0 || j < 0 || i >= GW - 1 || j >= GH - 1) return 0;
@@ -161,9 +165,23 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     }
   };
   const forest = t => t === T.woods || t === T.old, clearOf = (u, v, ft) => waterAt(u, v) < -ft / 6 && roadAt(u, v) > 6 + ft;
+  function edgeTree(wx, wy, u, v, r3, r4, gx, gy, t, cv) {
+    const lush = Math.max(0, -(tune.decay ?? 0)), cold = t === T.snow || t === T.crag || t === T.bad;
+    if (r3 >= nudge(.62 * Math.min(1, (cv - .35) / .45), tune.trees, 0) * (1 + lush * .12)) return;
+    let sp = cold ? null : story.speciesAt(wx, wy, T.woods);
+    if (!sp) sp = r4 < .7 ? { kind: "pine", col: PAL.pine[(r4 * 4 | 0) % 3] } : { kind: "hemlock", col: PAL.hemlock[(r4 * 7 | 0) % 3] };   /* the high tree line is evergreen */
+    const [rMin, rMax, tr] = SPECIES[sp.kind] ?? SPECIES.pine, R = (rMin + (rMax - rMin) * r4) * (cold ? .85 : .95) * (1 + lush * .22);
+    if (!clearOf(u, v, Math.max(2, tr * 2)) || inF(OPEN_FEATS, u, v, 1.1 + R / 22)) return;
+    const dz0 = tune.decay ?? 0, dead = hash(gx, gy, s + 517) < (dz0 >= 0 ? .02 + dz0 * .7 : .02 * (1 + dz0)) || inF(["dead"], u, v) && hash(gx, gy, s + 523) < .85;
+    const j = (hash(gx, gy, s + 519) - .5) * .16, Tt = season.T + j, ever = EVERGREEN.has(sp.kind);
+    feats.trees.push({ u, v, R, trunk: tr * (.8 + r4 * .5), kind: sp.kind, col: sp.col, seed: r3 * 997 + r4, dead, leaf: ever ? 1 : leafAt(Tt, season.rising), aut: ever ? 0 : autAt(Tt, season.rising), hue: (hash(gx, gy, s + 521) * 4) | 0, edge: true });
+  }
   /* trees: one chance per 18-ft square of the world */
   lattice(18, 501, (wx, wy, u, v, r3, r4, gx, gy) => {
-    const t = terrainAt(wx, wy);
+    const t = terrainAt(wx, wy), fx_ = wx * FT_PER_MI, fy_ = wy * FT_PER_MI;
+    /* the sheet draws crowns here though the ground isn't forest: a ragged tree line, trees standing in rough ground or snow */
+    const cv = forest(t) || t === T.water ? 0 : coverAt(wx + (fbm(fx_ / 40, fy_ / 40, 2, s + 531) - .5) * .004, wy + (fbm(fx_ / 40, fy_ / 40, 2, s + 533) - .5) * .004);
+    if (cv > .35) return edgeTree(wx, wy, u, v, r3, r4, gx, gy, t, cv);
     const p0 = t === T.old ? .72 : t === T.woods ? .78 : t === T.damp ? .5 : t === T.rough ? .035 : t === T.hills ? .05 : t === T.fields ? .006 : 0;
     const lush = Math.max(0, -(tune.decay ?? 0)), p = t === T.snow || t === T.crag ? p0 : nudge(p0, tune.trees, t === T.fields || t === T.rough || t === T.hills ? .25 : 0) * (1 + lush * (forest(t) ? .12 : .8));
     if (r3 >= p) return;
@@ -227,7 +245,7 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     const kind = forest(t) ? (r3 < (t === T.old ? .16 : .1) + lu * .2 ? "fern" : r3 < .38 + lu * .1 ? "leaf" : null) : (t === T.fields || t === T.rough || t === T.hills || t === T.damp) ? (r3 < .34 ? "tuft" : r3 < (t === T.fields ? .37 : .355) + lu * .06 ? "flower" : r4 < lu * .08 ? "fern" : null) : null;
     if (kind) feats.tufts.push({ u, v, kind, r: r4, t });
   });
-  return { cols, rows, Wft, Hft, x0, y1, cx, cy, tune, season, placed: FT, inF, land, terrainAt, elevAt, waterAt, roadAt, W, L, lines, feats };
+  return { cols, rows, Wft, Hft, x0, y1, cx, cy, tune, season, placed: FT, inF, land, terrainAt, coverAt, elevAt, waterAt, roadAt, W, L, lines, feats };
 }
 
 function segDist(px, py, a, b) { const dx = b.u - a.u, dy = b.v - a.v, l2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((px - a.u) * dx + (py - a.v) * dy) / l2)); return Math.hypot(px - a.u - t * dx, py - a.v - t * dy); }

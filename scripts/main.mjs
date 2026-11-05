@@ -432,29 +432,52 @@ const GROUND_NAMES = { 0: "fields", 1: "open rough ground", 2: "woods", 3: "old 
 const GROUP = t => t === TERRAIN.woods || t === TERRAIN.old ? "woods" : t === TERRAIN.snow ? "snow" : t === TERRAIN.crag || t === TERRAIN.bad ? "crag" : t === TERRAIN.water ? "water" : "open";
 /* the sheet picture's mix around a world point: tree green, snow white, crag grey, water blue, open tan (ink and shadow skipped) */
 const sheetImgs = new Map();
+async function sheetImage(scene) {
+  if (!scene?.getFlag(ID, "state")?.frame) return null;
+  const src = scene.levels.contents[0]?.background?.src; if (!src) return null;
+  let img = sheetImgs.get(src); if (!img) { img = new Image(); img.src = route(src.split("?")[0]) + "?" + (src.split("?")[1] ?? ""); await img.decode(); sheetImgs.clear(); sheetImgs.set(src, img); }
+  return img;
+}
+/* one pixel of the sheet picture: what ground it shows (null for ink and shadow) */
+const pixClass = (r, gg, b) => { const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b), L = (r + gg + b) / 3, sat = mx ? (mx - mn) / mx : 0;
+  if (L < 70) return null; return b > r + 12 && b >= gg - 4 ? "water" : gg >= r - 2 && gg - b > 22 ? "woods" : sat < .14 ? (L > 175 ? "snow" : "crag") : "open"; };
+/* the sheet picture around a world point, half-size R miles: pixels and where they sit */
+async function sheetPatch(scene, w, R) {
+  const img = await sheetImage(scene); if (!img) return null;
+  const f = scene.getFlag(ID, "state").frame, px = Math.round((w.x - f.x0) * PPM), py = Math.round((f.y1 - w.y) * PPM), n = Math.ceil(R * PPM), N = 2 * n + 1;
+  const c = document.createElement("canvas"); c.width = c.height = N; const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(img, px - n, py - n, N, N, 0, 0, N, N);
+  return { d: g.getImageData(0, 0, N, N).data, N, x0: f.x0 + (px - n) / PPM, y1: f.y1 - (py - n) / PPM };
+}
 async function sheetMix(scene, w, R) {
   try {
-    const src = scene.levels.contents[0]?.background?.src; if (!src) return null;
-    let img = sheetImgs.get(src); if (!img) { img = new Image(); img.src = route(src.split("?")[0]) + "?" + (src.split("?")[1] ?? ""); await img.decode(); sheetImgs.clear(); sheetImgs.set(src, img); }
-    const f = scene.getFlag(ID, "state").frame, px = (w.x - f.x0) * PPM, py = (f.y1 - w.y) * PPM, n = Math.ceil(R * PPM), N = 2 * n + 1;
-    const c = document.createElement("canvas"); c.width = c.height = N; const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(img, px - n, py - n, N, N, 0, 0, N, N);
-    const d = g.getImageData(0, 0, N, N).data, m = {}; let tot = 0;
-    for (let k = 0; k < d.length; k += 4) { const r = d[k], gg = d[k + 1], b = d[k + 2], mx = Math.max(r, gg, b), mn = Math.min(r, gg, b), L = (r + gg + b) / 3, sat = mx ? (mx - mn) / mx : 0;
-      if (L < 70) continue; const t = b > r + 12 && b >= gg - 4 ? "water" : gg >= r - 2 && gg - b > 22 ? "woods" : sat < .14 ? (L > 175 ? "snow" : "crag") : "open";
-      m[t] = (m[t] ?? 0) + 1; tot++; }
+    const P = await sheetPatch(scene, w, R); if (!P) return null; const m = {}; let tot = 0;
+    for (let k = 0; k < P.d.length; k += 4) { const t = pixClass(P.d[k], P.d[k + 1], P.d[k + 2]); if (!t) continue; m[t] = (m[t] ?? 0) + 1; tot++; }
     if (!tot) return null; for (const k in m) m[k] /= tot; return m;
   } catch (e) { console.warn(`${ID} | sheet mix`, e); return null; }
 }
+/* What you see is what you get: where the sheet picture shows tree crowns around an encounter (crowns are drawn standing up to
+   ~.3 mi north of their ground, over rough ground or snow). A 0/1 grid, one cell per picture pixel (~35 ft), kept on the scene. */
+async function sheetCover(scene, cx, cy, cols, rows) {
+  try {
+    const R = Math.max(cols, rows) * SQ_FT / FT_PER_MI / 2 + .04, P = await sheetPatch(scene, { x: cx, y: cy }, R); if (!P) return null;
+    let b = "", any = 0; for (let k = 0; k < P.d.length; k += 4) { const w = pixClass(P.d[k], P.d[k + 1], P.d[k + 2]) === "woods" ? 1 : 0; any += w; b += w; }
+    return any ? { x0: +P.x0.toFixed(5), y1: +P.y1.toFixed(5), ppm: PPM, n: P.N, b } : null;
+  } catch (e) { console.warn(`${ID} | sheet cover`, e); return null; }
+}
 async function groundAt(scene, w, cols = 40, rows = 40) {
   try {
-    const plan = planEncounter(await encounterInput(w.x, w.y, 10, 10), { cx: w.x, cy: w.y, cols: 10, rows: 10 }), tAt = (x, y) => plan.terrainAt(x, y);
+    const plan = planEncounter(await encounterInput(w.x, w.y, 10, 10), { cx: w.x, cy: w.y, cols: 10, rows: 10 });
+    /* on a sheet the map grows trees wherever the picture shows crowns, so candidates count those as woods too */
+    const P = await sheetPatch(scene, w, .6).catch(() => null), picWoods = (x, y) => { if (!P) return false; const i = Math.floor((x - P.x0) * PPM), j = Math.floor((P.y1 - y) * PPM);
+      if (i < 0 || j < 0 || i >= P.N || j >= P.N) return false; const k = (j * P.N + i) * 4; return pixClass(P.d[k], P.d[k + 1], P.d[k + 2]) === "woods"; };
+    const tAt = (x, y) => plan.terrainAt(x, y), grp = (x, y) => picWoods(x, y) ? "woods" : GROUP(tAt(x, y));
     const mixOf = (fn, cx, cy, half, n) => { const m = {}; for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) { const g = fn(cx + (a / (n - 1) - .5) * 2 * half, cy + (b / (n - 1) - .5) * 2 * half); m[g] = (m[g] ?? 0) + 1 / (n * n); } return m; };
     /* what you see: on a sheet, the picture itself around the cursor (~700 ft across); elsewhere, the land */
-    const target = (scene.getFlag(ID, "state")?.frame && await sheetMix(scene, w, .065)) || mixOf((x, y) => GROUP(tAt(x, y)), w.x, w.y, .04, 7);
+    const target = (scene.getFlag(ID, "state")?.frame && await sheetMix(scene, w, .065)) || mixOf(grp, w.x, w.y, .04, 7);
     const score = (m) => { let d = 0; for (const k of new Set([...Object.keys(m), ...Object.keys(target)])) d += Math.abs((m[k] ?? 0) - (target[k] ?? 0)); return d; };
     const search = (c, r) => { const half = c * SQ_FT / FT_PER_MI / 2; let best = null;
       for (let dx = -.45; dx <= .45; dx += .025) for (let dy = -.45; dy <= .45; dy += .025) { const dist = Math.hypot(dx, dy); if (dist > .45) continue;
-        const m = mixOf((x, y) => GROUP(tAt(x, y)), w.x + dx, w.y + dy, half, 6), sc = score(m) + dist * .25;
+        const m = mixOf(grp, w.x + dx, w.y + dy, half, 6), sc = score(m) + dist * .25;
         if (!best || sc < best.sc) best = { sc, at: { x: +(w.x + dx).toFixed(4), y: +(w.y + dy).toFixed(4) }, m, cols: c, rows: r, dist }; }
       return best; };
     let best = search(cols, rows);
@@ -711,7 +734,7 @@ Hooks.on("updateWorldTime", () => { if (isActiveGM()) syncEncounterDarkness().ca
 /** Build (or rebuild) the encounter scene's images, walls and terrain from its saved world position. */
 async function drawEncounterScene(scene) {
   const st = scene.getFlag(ID, "encounter"), { cx, cy, cols, rows, tune } = st;
-  const cal = calendarNow(), plan = planEncounter(await encounterInput(cx, cy, cols, rows), { cx, cy, cols, rows, tune, yearFrac: cal.yearFrac, features: st.features ?? [] });
+  const cal = calendarNow(), plan = planEncounter(await encounterInput(cx, cy, cols, rows), { cx, cy, cols, rows, tune, yearFrac: cal.yearFrac, features: st.features ?? [], cover: st.cover ?? null });
   const ground = drawEncounter(plan, "real", ENC_PX, "ground"), canopy = drawEncounter(plan, "real", ENC_PX, "canopy");
   const rev = foundry.utils.randomID(6), slot = st.slot === "a" ? "b" : "a";
   const g = await uploadCanvas(ground, `${scene.id}-enc-${slot}.webp`), c = await uploadCanvas(canopy, `${scene.id}-enc-${slot}-canopy.webp`);
@@ -793,11 +816,11 @@ export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, 
   /* notes: known features go on the map (kept in world miles), anything else is kept for Claude */
   const parsed = parseNotes(notes ?? ""), wmi = cols * SQ_FT / FT_PER_MI, hmi = rows * SQ_FT / FT_PER_MI;
   const features = parsed.features.map(f => ({ kind: f.kind, x: +(at.x - wmi / 2 + f.fx * wmi).toFixed(5), y: +(at.y + hmi / 2 - f.fy * hmi).toFixed(5), size: f.size, ang: f.ang, text: f.text }));
-  const src = game.scenes.get(at.from);
+  const src = game.scenes.get(at.from), cover = src ? await sheetCover(src, at.x, at.y, ENC_MAX, ENC_MAX) : null;   /* room to extend */
   name = String(name ?? "").trim().slice(0, 120) || `Encounter: ${src?.name ?? "the wilds"} (${at.x.toFixed(2)}, ${at.y.toFixed(2)})`;
   const scene = await Scene.create({ name, folder: (await encFolder()).id, navigation: false, width: cols * ENC_PX, height: rows * ENC_PX, padding: 0.1,
     grid: { type: CONST.GRID_TYPES.SQUARE, size: ENC_PX, distance: SQ_FT, units: "ft", alpha: 0.18 }, tokenVision: true, fog: { mode: 2 },
-    environment: { globalLight: { enabled: true, darkness: { min: 0, max: .5 } } }, flags: { pf2e: { syncDarkness: "disabled" }, [ID]: { encounter: { version: 1, cx: at.x, cy: at.y, cols, rows, from: at.from ?? null, tune: tune ?? null, features, notes: String(notes ?? "").slice(0, 2000), unknown: parsed.unknown } } } });
+    environment: { globalLight: { enabled: true, darkness: { min: 0, max: .5 } } }, flags: { pf2e: { syncDarkness: "disabled" }, [ID]: { encounter: { version: 1, cx: at.x, cy: at.y, cols, rows, from: at.from ?? null, tune: tune ?? null, features, notes: String(notes ?? "").slice(0, 2000), unknown: parsed.unknown, cover } } } });
   const drawn = await drawEncounterScene(scene);
   const members = party ? await placeMembers(scene) : 0;
   if (activate) await scene.activate(); else if (view) await scene.view();
