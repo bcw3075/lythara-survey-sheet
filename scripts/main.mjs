@@ -1,5 +1,5 @@
 import { PPM, renderMap } from "./render.mjs";
-import { CELL, lineCourse } from "./land.mjs";
+import { CELL, lineCourse, T as TERRAIN } from "./land.mjs";
 import { classifyImage, surveyToPng, surveyFromPng, surveySlice, SURVEY_FILE, SURVEY_VERSION } from "./survey.mjs";
 import { harvestScene, restoreScene, syncExploration, exploredArea } from "./explore.mjs";
 import { planEncounter, drawEncounter, parseNotes, FT_PER_MI, SQ_FT } from "./encounter.mjs";
@@ -421,15 +421,30 @@ function worldPointAt(scene, p) {
   if (isWorldMap(scene)) { const w = mapGeometry().toWorld(p); return { x: +w.x.toFixed(3), y: +w.y.toFixed(3) }; }
   return null;
 }
+/* What you see is what you get. Sheet trees are drawn side-on, standing on their ground, so a crown shows up to ~.35 mi north
+   of where the tree grows. A click on a crown (not forest underneath, forest just south) is moved to the trees' ground, onto
+   the wood's edge, so the map shows the edge. Also names the ground at the spot for the dialog. */
+const GROUND_NAMES = { 0: "fields", 1: "open rough ground", 2: "woods", 3: "old growth", 4: "damp low ground", 5: "water", 6: "hills", 7: "bad ground", 8: "bare crag", 9: "snowfield" };
+async function groundAt(scene, w) {
+  try {
+    /* read the ground exactly as the encounter map will (same warp), from a small plan around the click */
+    const plan = planEncounter(await encounterInput(w.x, w.y, 10, 10), { cx: w.x, cy: w.y, cols: 10, rows: 10 }), land = { tAt: (x, y) => plan.terrainAt(x, y) };
+    const forest = t => t === TERRAIN.woods || t === TERRAIN.old;
+    let t = land.tAt(w.x, w.y), at = w, moved = 0;
+    if (scene.getFlag(ID, "state")?.frame && !forest(t)) for (let dy = .01; dy <= .4; dy += .01) if (forest(land.tAt(w.x, w.y - dy))) { at = { x: w.x, y: +(w.y - dy).toFixed(3) }; t = land.tAt(at.x, at.y); moved = dy; break; }   /* on the edge itself: half wood, half what lies north */
+    const edge = forest(t) && [[.08, 0], [-.08, 0], [0, .08], [0, -.08]].some(([a, b]) => !forest(land.tAt(at.x + a, at.y + b)));
+    return { at, moved, ground: (GROUND_NAMES[t] ?? "open ground") + (edge ? " (at the wood's edge)" : "") };
+  } catch (e) { console.warn(`${ID} | ground`, e); return { at: w, moved: 0, ground: "" }; }
+}
 const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 /* the dialog's layout, added to the page once (Foundry strips <style> from dialog content, and a cached sheet.css can lag a release) */
 function encStyle() { if (document.getElementById("lss-enc-style")) return; const st = document.createElement("style"); st.id = "lss-enc-style";
   st.textContent = `.lss-enc .window-content{overflow-y:auto!important}.lss-enc .lss-tune{display:grid!important;grid-template-columns:1fr 1fr;gap:4px 14px}.lss-enc .lss-tune legend{grid-column:1/-1}.lss-enc .lss-slider{display:grid;grid-template-columns:6.5em 1fr;align-items:center;gap:6px}.lss-enc .lss-slider input[type=range]{width:100%;margin:0}.lss-enc .lss-slider .hint{font-size:10px;margin:0}.lss-enc textarea{width:100%}`; document.head.appendChild(st); }
-async function askEncounter(scene, w) {
+async function askEncounter(scene, w, g = {}) {
   encStyle();
   const D = foundry.applications.api.DialogV2, def = `Encounter: ${scene.name} (${w.x.toFixed(2)}, ${w.y.toFixed(2)})`;
   return D.input({ window: { title: "Encounter map here", resizable: true }, classes: ["lss-enc"], position: { width: 640, height: Math.min(window.innerHeight - 40, 760), top: 20 }, ok: { label: "Make the map" },
-    content: `<p>An encounter map centred on the spot you clicked, ${Math.abs(w.x).toFixed(2)} mi ${w.x < 0 ? "west" : "east"} and ${Math.abs(w.y).toFixed(2)} mi ${w.y < 0 ? "south" : "north"} of the world origin.</p>
+    content: `<p>An encounter map centred on the spot you clicked, ${Math.abs(w.x).toFixed(2)} mi ${w.x < 0 ? "west" : "east"} and ${Math.abs(w.y).toFixed(2)} mi ${w.y < 0 ? "south" : "north"} of the world origin.${g.ground ? ` Ground here: <b>${esc(g.ground)}</b>.` : ""}${g.moved ? ` (Moved ${Math.round(g.moved * FT_PER_MI)} ft south onto the trees you clicked; the sheet draws tree crowns above their ground.)` : ""}</p>
       <div class="form-group"><label>Name</label><input type="text" name="name" value="${esc(def)}"></div>
       <div class="form-group"><label>Squares across</label><input type="number" name="cols" value="40" min="10" max="${ENC_MAX}" step="1"></div>
       <div class="form-group"><label>Squares down</label><input type="number" name="rows" value="40" min="10" max="${ENC_MAX}" step="1"></div>
@@ -445,9 +460,10 @@ function setEncPlacing(on) {
   if (!on) return;
   encHandler = async ev => {
     if (ev.button !== 0 || ui.controls.tool?.name !== "encounterHere" || busy) return;
-    const scene = canvas.scene, w = worldPointAt(scene, ev.getLocalPosition(canvas.stage));
+    const scene = canvas.scene; let w = worldPointAt(scene, ev.getLocalPosition(canvas.stage));
     if (!w) return ui.notifications.warn("Click on an overland sheet or the World Map.");
-    const opts = await askEncounter(scene, w); if (!opts) return;
+    const g = await groundAt(scene, w); w = g.at;
+    const opts = await askEncounter(scene, w, g); if (!opts) return;
     busy = true; const note = ui.notifications.info("Drawing the encounter map… about 15 seconds.", { permanent: true });
     try {
       const tune = Object.fromEntries(TUNE_LABELS.map(([k]) => [k, (Number(opts[`tune_${k}`]) || 0) / 100]));
