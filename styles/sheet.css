@@ -6,3 +6,12 @@
 .lss-panel .lss-row button { width: auto; flex: 1 1 auto; }
 .lss-panel .lss-row input[type="text"] { flex: 1 1 140px; }
 .lss-panel .lss-status { min-height: 18px; margin-top: 4px; font-weight: 600; }
+
+/* Encounter map here dialog: scrolls inside the screen, sliders two to a row */
+.lss-enc .window-content { overflow-y: auto; }
+.lss-enc .lss-tune { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px; }
+.lss-enc .lss-tune legend { grid-column: 1 / -1; }
+.lss-enc .lss-slider { display: grid; grid-template-columns: 6.5em 1fr; align-items: center; gap: 6px; }
+.lss-enc .lss-slider input[type="range"] { width: 100%; margin: 0; }
+.lss-enc .lss-slider .hint { font-size: 10px; margin: 0; }
+.lss-enc textarea { width: 100%; }

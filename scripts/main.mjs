@@ -424,16 +424,16 @@ function worldPointAt(scene, p) {
 const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 async function askEncounter(scene, w) {
   const D = foundry.applications.api.DialogV2, def = `Encounter: ${scene.name} (${w.x.toFixed(2)}, ${w.y.toFixed(2)})`;
-  return D.input({ window: { title: "Encounter map here" }, ok: { label: "Make the map" },
+  return D.input({ window: { title: "Encounter map here", resizable: true }, classes: ["lss-enc"], position: { width: 640, height: Math.min(window.innerHeight - 40, 760), top: 20 }, ok: { label: "Make the map" },
     content: `<p>An encounter map centred on the spot you clicked, ${Math.abs(w.x).toFixed(2)} mi ${w.x < 0 ? "west" : "east"} and ${Math.abs(w.y).toFixed(2)} mi ${w.y < 0 ? "south" : "north"} of the world origin.</p>
       <div class="form-group"><label>Name</label><input type="text" name="name" value="${esc(def)}"></div>
       <div class="form-group"><label>Squares across</label><input type="number" name="cols" value="40" min="10" max="${ENC_MAX}" step="1"></div>
       <div class="form-group"><label>Squares down</label><input type="number" name="rows" value="40" min="10" max="${ENC_MAX}" step="1"></div>
       <div class="form-group"><label>Put the party there</label><input type="checkbox" name="party"></div>
-      <div class="form-group stacked"><label>Add to the map</label><textarea name="notes" rows="3" placeholder="e.g. a pond in the north-east, a stand of dead trees, a cave entrance on the west side facing east"></textarea>
+      <div class="form-group stacked"><label>Add to the map</label><textarea name="notes" rows="2" placeholder="e.g. a pond in the north-east, a stand of dead trees, a cave entrance on the west side facing east"></textarea>
         <p class="hint">Known: lake, pond, stream, dead trees, clearing, boulders, rock outcrop, cave entrance, standing stones, ruins, campsite, fallen giant tree. Places: north, south-east, middle, edge… Anything else is kept on the scene for Claude.</p></div>
-      <fieldset><legend>Tune the spot (middle = the land as it is)</legend>${TUNE_LABELS.map(([k, label, lo, hi]) =>
-        `<div style="display:grid;grid-template-columns:6.5em 5.5em 1fr 6.5em;align-items:center;gap:.4em;margin:.15em 0"><label>${label}</label><span class="hint" style="text-align:right;margin:0">${lo}</span><input type="range" name="tune_${k}" min="-100" max="100" step="10" value="0"><span class="hint" style="margin:0">${hi}</span></div>`).join("")}</fieldset>
+      <fieldset class="lss-tune"><legend>Tune the spot (middle = the land as it is)</legend>${TUNE_LABELS.map(([k, label, lo, hi]) =>
+        `<div class="lss-slider"><label>${label}</label><div><input type="range" name="tune_${k}" min="-100" max="100" step="10" value="0"><span class="hint">${lo}</span><span class="hint" style="float:right">${hi}</span></div></div>`).join("")}</fieldset>
       <p class="hint">Leave the party unticked to plan ahead. The map opens for you only; players don't see it until you activate it.</p>` }).catch(() => null);
 }
 function setEncPlacing(on) {
