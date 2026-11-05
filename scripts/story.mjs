@@ -1,4 +1,4 @@
-import { CELL, hash, fbm } from "./land.mjs";
+import { CELL, hash, fbm, snowlineAt } from "./land.mjs";
 
 /* ---------- storybook trees: same code in the module and the Survey Sheet ----------
    Tree types are a best guess from real temperate woods: terrain, ground height, wetness,
@@ -24,7 +24,20 @@ export function makeStory(land) {
   const forest = t => t === 2 || t === 3, open = t => t === 0 || t === 1;
   const isEdge = (x, y, n = .42) => forest(tAt(x + n, y)) || forest(tAt(x - n, y)) || forest(tAt(x, y + n)) || forest(tAt(x, y - n));
   const openNear = (x, y, n = .8) => open(tAt(x + n, y)) || open(tAt(x - n, y)) || open(tAt(x, y + n)) || open(tAt(x, y - n));
+  /* altitude: woods turn from broadleaf to mixed to conifer as the ground climbs into the mountains (HEIGHTS.mtnMin is 2,000 ft;
+     snow-capped crags here stand near 3,400 ft). 0 at 1,800 ft, 1 at 2,600 ft, at Stoneclaim's latitude; the bands fall going north with the snowline. */
+  const montane = (x, y) => { const k = snowlineAt(y) / 7000; return (elevAt(x, y) - 1800 * k) / (800 * Math.max(.3, k)); };
   function speciesAt(x, y, t) {
+    const base = speciesLow(x, y, t); if (!base) return base;
+    const z = montane(x, y); if (z <= 0) return base;
+    const k = Math.round(x * 97), m = Math.round(y * 97), h2 = hash(k, m, 34), h3 = hash(k, m, 35), pick = (kind, pal) => ({ kind, col: P[pal || kind][(h3 * P[pal || kind].length) | 0] });
+    const conifer = Math.min(.96, z * .92);   /* share of evergreens: a mixed band, then mostly fir and pine, birch the last broadleaf */
+    if (h2 < conifer) return reliefAt(x, y) > STORY_RIDGE - .08 || hash(k, m, 36) < .45 ? pick("pine") : pick("hemlock");   /* pine on the ridges, fir-like hemlock in the folds */
+    if (base.kind === "willow" && z > .5) return pick("birch");
+    if (z > .8 && base.kind !== "birch") return pick("birch");
+    return base;
+  }
+  function speciesLow(x, y, t) {
     const k = Math.round(x * 97), m = Math.round(y * 97), h = hash(k, m, 31), h2 = hash(k, m, 32), h3 = hash(k, m, 33), pick = (kind, pal) => ({ kind, col: P[pal || kind][(h3 * P[pal || kind].length) | 0] });
     if (t === 4) { if (h < .25) return null; return h < .78 ? pick("willow") : pick("birch"); }
     if (open(t)) { if (isEdge(x, y) && h < .1) return pick("birch"); if (creekDist(x, y) < .2 && h < .18) return pick("willow"); if (t === 1 && h < .012) return pick("oakS", "oak"); return null; }
