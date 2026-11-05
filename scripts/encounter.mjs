@@ -310,9 +310,15 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
   for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) { const k = j * fw + i, p = plan.W(i, j); TF[k] = plan.terrainAt(p.x, p.y); WF[k] = plan.waterAt(i, j); RF[k] = plan.roadAt(i, j);
     const fx = p.x * FT_PER_MI, fy = p.y * FT_PER_MI; EF[k] = plan.elevAt(p.x, p.y) + (fbm(fx / 30, fy / 30, 3, plan.land.s + 41) - .5) * 5 - Math.max(0, WF[k] + 1) * 2.4; }
   const bil = (A, u, v) => { const i = Math.max(0, Math.min(fw - 2, Math.floor(u))), j = Math.max(0, Math.min(fh - 2, Math.floor(v))), a = u - i, b = v - j, k = j * fw + i; return (A[k] * (1 - a) + A[k + 1] * a) * (1 - b) + (A[k + fw] * (1 - a) + A[k + fw + 1] * a) * b; };
+  /* terrain at a point: the class holding the most bilinear weight among the four surrounding feet (no allocation: called per pixel) */
   const tAt = (u, v) => { const i0 = Math.max(0, Math.min(fw - 2, Math.floor(u))), j0 = Math.max(0, Math.min(fh - 2, Math.floor(v))), fa = u - i0, fb = v - j0, k0 = j0 * fw + i0;
-    const q = [TF[k0], TF[k0 + 1], TF[k0 + fw], TF[k0 + fw + 1]], wq = [(1 - fa) * (1 - fb), fa * (1 - fb), (1 - fa) * fb, fa * fb]; let t = q[0], best = -1;
-    for (const a of q) { let s = 0; for (let n = 0; n < 4; n++) if (q[n] === a) s += wq[n]; if (s > best) { best = s; t = a; } } return t; };
+    const q0 = TF[k0], q1 = TF[k0 + 1], q2 = TF[k0 + fw], q3 = TF[k0 + fw + 1];
+    if (q0 === q1 && q0 === q2 && q0 === q3) return q0;
+    const w0 = (1 - fa) * (1 - fb), w1 = fa * (1 - fb), w2 = (1 - fa) * fb, w3 = fa * fb;
+    const s = a => (q0 === a ? w0 : 0) + (q1 === a ? w1 : 0) + (q2 === a ? w2 : 0) + (q3 === a ? w3 : 0);
+    let t = q0, best = s(q0), z; if ((z = s(q1)) > best) { best = z; t = q1; } if ((z = s(q2)) > best) { best = z; t = q2; } if ((z = s(q3)) > best) t = q3; return t; };
+  /* slope shading per foot, sampled per pixel */
+  const SL = new Float32Array(fw * fh); for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) SL[j * fw + i] = (bil(EF, i - 1.5, j) - bil(EF, i + 1.5, j) + bil(EF, i, j - 1.5) - bil(EF, i, j + 1.5)) * .8;
   const ox = plan.x0 * FT_PER_MI, oy = plan.y1 * FT_PER_MI;
   /* overall flow direction of the water, for streaks */
   let fa = 0; { const wl = plan.lines.find(l => l.kind === "creek" || l.kind === "river"); if (wl && wl.pts.length > 1) { const a = wl.pts[0], b = wl.pts[wl.pts.length - 1]; fa = Math.atan2(b.v - a.v, b.u - a.u); } }
@@ -330,7 +336,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
           col = mixc(col, [86, 116, 46], sm(.5, .72, tbl(gx / 2.2 + 31, gy / 2.2 + 13)) * .3); }
         /* moss on the forest floor */
         if (t === T.woods || t === T.old) col = mixc(col, [58, 78, 34], sm(.55, .7, tbl(gx / 7 + 5, gy / 7 + 2)) * .7);
-        const sl = (bil(EF, u - 1.5, v) - bil(EF, u + 1.5, v) + bil(EF, u, v - 1.5) - bil(EF, u, v + 1.5)) * .8;
+        const sl = bil(SL, u, v);
         let d = (n3 - .5) * 10 + (ihash(gx * 10, gy * 10) - .5) * 7 + sl * 6;
         const wa = bil(WF, u, v), rd = bil(RF, u, v);
         if (rd < 6.5) { const e = sm(6.5, 4.8, rd); col = mixc(col, mixc([138, 116, 82], [118, 98, 70], n2), e); if (Math.abs(rd - 2.6) < .7) d -= 18 * e; if (ihash(gx * 4, gy * 4) > .93) d += 24 * e; }
@@ -393,7 +399,13 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
     for (const g of plan.feats.logs) realLog(c, g.u * ppf, g.v * ppf, g.len * ppf, g.w * ppf, g.ang, g.u * 7 + g.v);
     /* tree shadows: crisp, long, in the crown's outline, falling south-east (sun high in the north-west) */
     c.save(); c.globalCompositeOperation = "multiply"; c.fillStyle = "rgb(138,144,156)";
-    for (const t of plan.feats.trees) { const R = t.R * ppf * .97, x = t.u * ppf + R * .36, y = t.v * ppf + R * .42; c.filter = `blur(${Math.max(1, R * .1)}px)`; c.beginPath(); for (const f of florets(t)) { c.moveTo(x + f.x * R + f.r * R, y + f.y * R); c.arc(x + f.x * R, y + f.y * R, f.r * R, 0, 7); } c.fill(); }
+    /* each shadow is blurred on a small scratch canvas, then multiplied in: a blur filter on the full map canvas costs a whole-canvas pass per tree */
+    for (const t of plan.feats.trees) { const R = t.R * ppf * .97, x = t.u * ppf + R * .36, y = t.v * ppf + R * .42, bl = Math.max(1, R * .1);
+      /* blurred at reduced resolution (the edge is soft anyway), then scaled up */
+      const q = Math.max(1, Math.min(4, bl / 1.5)), pad = Math.ceil(R * 1.2 + bl * 3 + 4), S = pad * 2, s2 = Math.ceil(S / q), sc = scratch(s2), ox = Math.floor(x) - pad, oy = Math.floor(y) - pad, k = sc.c;
+      k.setTransform(1, 0, 0, 1, 0, 0); k.clearRect(0, 0, s2 + 1, s2 + 1); k.filter = `blur(${bl / q}px)`; k.fillStyle = "rgb(138,144,156)"; k.beginPath();
+      for (const f of florets(t)) { const fx = (x - ox + f.x * R) / q, fy = (y - oy + f.y * R) / q, fr = f.r * R / q; k.moveTo(fx + fr, fy); k.arc(fx, fy, fr, 0, 7); } k.fill(); k.filter = "none";
+      c.drawImage(sc.cv, 0, 0, s2, s2, ox, oy, s2 * q, s2 * q); }
     c.restore();
     /* trunks and root flare, seen when the canopy above fades */
     for (const t of plan.feats.trees) { const x = t.u * ppf, y = t.v * ppf, r = Math.max(t.trunk, .5) * ppf;
@@ -429,6 +441,9 @@ function florets(t) {
 /* a circle with a leafy, bumpy edge */
 function bumpy(c, x, y, r, r_, n = 11, amp = .14) { const ph = r_() * 6.283, a2 = r_() * 6.283; c.moveTo(x + r, y);
   for (let k = 0; k <= 40; k++) { const a = k / 40 * 6.283, rr = r * (1 + amp * (.6 * Math.cos(n * a + ph) + .4 * Math.cos((n + 3) * a + a2))); k ? c.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr) : c.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); } c.closePath(); }
+let SCR = null;
+/* one reusable scratch canvas, grown as needed */
+function scratch(S) { if (!SCR || SCR.cv.width < S) { const cv = document.createElement("canvas"); cv.width = cv.height = Math.max(S, SCR ? SCR.cv.width : 0); SCR = { cv, c: cv.getContext("2d") }; } return SCR; }
 function realCanopy(c, x, y, R, col, seed, ppf, scale, kind) {
   const r_ = rng(Math.round(seed * 9973) + 17), Rft = R / ppf;
   const tint = (kind === "birch" || kind === "beech" || kind === "beechS" || kind === "willow" ? .4 : kind === "dark" ? -.35 : kind === "brush" ? -.15 : 0) + (r_() - .5) * .6, val = (kind === "dark" ? .9 : 1) * (.9 + r_() * .2);
@@ -436,8 +451,9 @@ function realCanopy(c, x, y, R, col, seed, ppf, scale, kind) {
   const F = florets({ R: Rft, seed }), lw = Math.max(1.4, ppf * .14);
   /* silhouette: a dark rim, then the shaded body; overlapping strokes are covered so only the outer edge shows */
   const shapes = F.map(f => ({ f, s: r_() * 1e6 }));
-  c.lineJoin = "round"; c.strokeStyle = tone(-.1); c.lineWidth = lw * 2; c.beginPath(); for (const { f, s } of shapes) bumpy(c, x + f.x * R, y + f.y * R, f.r * R * 1.04, rng(s)); c.stroke();
-  c.fillStyle = tone(.05); c.beginPath(); for (const { f, s } of shapes) bumpy(c, x + f.x * R, y + f.y * R, f.r * R * 1.04, rng(s)); c.fill();
+  const sil = new Path2D(); for (const { f, s } of shapes) bumpy(sil, x + f.x * R, y + f.y * R, f.r * R * 1.04, rng(s));
+  c.lineJoin = "round"; c.strokeStyle = tone(-.1); c.lineWidth = lw * 2; c.stroke(sil);
+  c.fillStyle = tone(.05); c.fill(sil);
   /* each floret in three clean tones, lowest first, then a leaf texture on top */
   const leaf = Math.max(.3, Math.min(.5, Rft * .035));
   for (const { f } of shapes.slice().sort((a, b) => a.f.h - b.f.h)) {
@@ -446,11 +462,15 @@ function realCanopy(c, x, y, R, col, seed, ppf, scale, kind) {
     c.fillStyle = tone(.58 + lift); c.beginPath(); bumpy(c, fx - fr * .17, fy - fr * .19, fr * .68, r_, 8, .16); c.fill();
     c.fillStyle = tone(.82 + lift); c.beginPath(); bumpy(c, fx - fr * .3, fy - fr * .33, fr * .34, r_, 7, .2); c.fill();
     /* leaves: small stamps tinted by where they sit on the floret, plus a few dark gaps on the shaded side */
-    const n = Math.round((10 + 1.1 * (f.r * Rft / leaf) ** 2) * scale);
+    const n = Math.round((10 + 1.1 * (f.r * Rft / leaf) ** 2) * scale), B = new Map();
     for (let i = 0; i < n; i++) { const a = r_() * 6.283, d = Math.sqrt(r_()) * .92, lx = Math.cos(a) * d, ly = Math.sin(a) * d, lit = Math.max(0, -(lx + ly) * .45 + .5 - d * .3);
       const px = fx + lx * fr, py = fy + ly * fr, rr = (.6 + r_() * .7) * leaf * ppf;
-      if (lit < .25 && r_() < .35) { c.fillStyle = tone(.05); } else c.fillStyle = tone(.25 + lit * .7 + lift + (r_() - .5) * .12);
-      c.globalAlpha = .8; c.beginPath(); c.ellipse(px, py, rr * 1.2, rr * .75, r_() * 3.14, 0, 7); c.fill(); c.globalAlpha = 1; }
+      const t = (lit < .25 && r_() < .35) ? .05 : .25 + lit * .7 + lift + (r_() - .5) * .12, q = Math.round(t * 40);
+      const key = (i & 7) * 1000 + q; let path = B.get(key); if (!path) B.set(key, path = new Path2D());
+      const rot = r_() * 3.14; path.moveTo(px + Math.cos(rot) * rr * 1.2, py + Math.sin(rot) * rr * 1.2); path.ellipse(px, py, rr * 1.2, rr * .75, rot, 0, 6.2832); }
+    /* leaves are grouped by tone (one fill per tone, not per leaf) in eight interleaved passes, tones shuffled within a pass; the dark gaps go last so they read on top */
+    const ord = k => k % 1000 === 2 ? 99 : Math.floor(k / 1000) * 10 + hash(k % 1000, 5, 77);
+    c.globalAlpha = .8; for (const k of [...B.keys()].sort((a, b) => ord(a) - ord(b))) { c.fillStyle = tone((k % 1000) / 40); c.fill(B.get(k)); } c.globalAlpha = 1;
   }
 }
 function realConifer(c, x, y, R, col, seed, ppf) {
