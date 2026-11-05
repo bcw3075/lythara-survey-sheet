@@ -422,12 +422,14 @@ function worldPointAt(scene, p) {
   return null;
 }
 const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+/* the dialog's layout, added to the page once (Foundry strips <style> from dialog content, and a cached sheet.css can lag a release) */
+function encStyle() { if (document.getElementById("lss-enc-style")) return; const st = document.createElement("style"); st.id = "lss-enc-style";
+  st.textContent = `.lss-enc .window-content{overflow-y:auto!important}.lss-enc .lss-tune{display:grid!important;grid-template-columns:1fr 1fr;gap:4px 14px}.lss-enc .lss-tune legend{grid-column:1/-1}.lss-enc .lss-slider{display:grid;grid-template-columns:6.5em 1fr;align-items:center;gap:6px}.lss-enc .lss-slider input[type=range]{width:100%;margin:0}.lss-enc .lss-slider .hint{font-size:10px;margin:0}.lss-enc textarea{width:100%}`; document.head.appendChild(st); }
 async function askEncounter(scene, w) {
+  encStyle();
   const D = foundry.applications.api.DialogV2, def = `Encounter: ${scene.name} (${w.x.toFixed(2)}, ${w.y.toFixed(2)})`;
   return D.input({ window: { title: "Encounter map here", resizable: true }, classes: ["lss-enc"], position: { width: 640, height: Math.min(window.innerHeight - 40, 760), top: 20 }, ok: { label: "Make the map" },
-    content: `<style>.lss-enc .window-content{overflow-y:auto!important}.lss-enc .lss-tune{display:grid!important;grid-template-columns:1fr 1fr;gap:4px 14px}.lss-enc .lss-tune legend{grid-column:1/-1}
-      .lss-enc .lss-slider{display:grid;grid-template-columns:6.5em 1fr;align-items:center;gap:6px}.lss-enc .lss-slider input[type=range]{width:100%;margin:0}.lss-enc .lss-slider .hint{font-size:10px;margin:0}.lss-enc textarea{width:100%}</style>
-      <p>An encounter map centred on the spot you clicked, ${Math.abs(w.x).toFixed(2)} mi ${w.x < 0 ? "west" : "east"} and ${Math.abs(w.y).toFixed(2)} mi ${w.y < 0 ? "south" : "north"} of the world origin.</p>
+    content: `<p>An encounter map centred on the spot you clicked, ${Math.abs(w.x).toFixed(2)} mi ${w.x < 0 ? "west" : "east"} and ${Math.abs(w.y).toFixed(2)} mi ${w.y < 0 ? "south" : "north"} of the world origin.</p>
       <div class="form-group"><label>Name</label><input type="text" name="name" value="${esc(def)}"></div>
       <div class="form-group"><label>Squares across</label><input type="number" name="cols" value="40" min="10" max="${ENC_MAX}" step="1"></div>
       <div class="form-group"><label>Squares down</label><input type="number" name="rows" value="40" min="10" max="${ENC_MAX}" step="1"></div>
