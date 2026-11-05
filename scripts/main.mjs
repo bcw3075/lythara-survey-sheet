@@ -576,8 +576,10 @@ async function drawEncounterScene(scene) {
   const d = scene.dimensions, ox = d.sceneX, oy = d.sceneY, ppf = ENC_PX / SQ_FT;
   /* clear what this module drew before */
   for (const type of ["Tile", "Wall", "Region"]) { const ids = scene.getEmbeddedCollection(type).filter(x => x.getFlag(ID, "enc")).map(x => x.id); if (ids.length) await scene.deleteEmbeddedDocuments(type, ids); }
-  await scene.createEmbeddedDocuments("Tile", [{ x: ox, y: oy, width: d.sceneWidth, height: d.sceneHeight, elevation: CANOPY_ELEV, texture: { src: `${c.path}?v=${rev}` },
-    occlusion: { modes: [CONST.OCCLUSION_MODES.FADE], alpha: 0.15 }, flags: { [ID]: { enc: "canopy" } } }]);
+  /* one canopy tile over the whole map (in v14 a tile's x/y is its centre). Radial occlusion cuts a see-through hole around
+     each token beneath it; a fade would turn the whole canopy see-through as soon as any token stood under any tree. */
+  await scene.createEmbeddedDocuments("Tile", [{ x: ox + d.sceneWidth / 2, y: oy + d.sceneHeight / 2, width: d.sceneWidth, height: d.sceneHeight, elevation: CANOPY_ELEV, texture: { src: `${c.path}?v=${rev}` },
+    occlusion: { modes: [CONST.OCCLUSION_MODES.RADIAL], alpha: 0.2 }, flags: { [ID]: { enc: "canopy" } } }]);
   /* trunks thick enough to hide behind */
   const walls = [], N = CONST.WALL_SENSE_TYPES.NORMAL;
   for (const t of plan.feats.trees) { if (t.trunk < TRUNK_WALL_FT || t.u < 0 || t.v < 0 || t.u > plan.Wft || t.v > plan.Hft) continue;
