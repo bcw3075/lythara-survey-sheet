@@ -276,13 +276,12 @@ async function partyFollowMarker(marker, pos) {
   }
 }
 /* which way the party last travelled (world miles, unit vector), so Fight Here can bring them in on the edge they came from.
-   The client that moves a token stamps where it started; the active GM keeps the heading. */
+   Foundry's moveToken hook carries where a move started and ended; the active GM keeps the heading. */
 const partyTokWorld = (tok, pos = tok) => { const sc = tok.parent; if (sc?.getFlag(ID, "state")?.frame) { const c = tokenCentre(tok, pos); return toMiles(sc, c.x, c.y); } if (isWorldMap(sc)) return mapGeometry().toWorld(tokenCentre(tok, pos)); return null; };
 const isPartyTok = tok => { const party = partyActor(); return !!party && (tok.actorId === party.id || memberIds(party).has(tok.actorId)); };
-Hooks.on("preUpdateToken", (tok, change, opts) => { if (("x" in change || "y" in change) && isPartyTok(tok)) opts.lssFrom = { x: tok.x, y: tok.y }; });
-Hooks.on("updateToken", (tok, change, opts) => {
-  if (!isActiveGM() || !opts?.lssFrom || opts?.[ID]?.[SYNC] || !isPartyTok(tok)) return;
-  const a = partyTokWorld(tok, opts.lssFrom), b = partyTokWorld(tok); if (!a || !b) return;
+Hooks.on("moveToken", (tok, mv, opts) => {
+  if (!isActiveGM() || opts?.[ID]?.[SYNC] || !mv?.origin || !mv?.destination || !isPartyTok(tok)) return;
+  const a = partyTokWorld(tok, mv.origin), b = partyTokWorld(tok, mv.destination); if (!a || !b) return;
   const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy); if (d < .02) return;
   game.settings.set(ID, "heading", { x: +(dx / d).toFixed(3), y: +(dy / d).toFixed(3) }).catch(() => {});
 });
