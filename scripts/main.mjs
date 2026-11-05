@@ -570,7 +570,7 @@ for (const hook of ["canvasReady", "canvasPan", "drawNote", "refreshNote", "crea
    undergrowth) is the level's background; tree crowns are one overhead tile that fades when a token walks beneath;
    thick trunks are short walls; undergrowth and water are PF2e difficult terrain. The map remembers where in the world
    it sits, so it can grow at an edge and the party can go back to the same spot on the sheet afterwards. */
-const ENC_FOLDER = "Encounter Maps", ENC_PX = 100, ENC_MAX = 120, CANOPY_ELEV = 20, TRUNK_WALL_FT = 1.5;
+const ENC_FOLDER = "Encounter Maps", ENC_PX = 100, ENC_MAX = 120, CANOPY_ELEV = 20, TRUNK_THIN = .75, TRUNK_THICK = 1.6;
 const encFolder = async () => game.folders.find(f => f.type === "Scene" && f.name === ENC_FOLDER) ?? Folder.create({ name: ENC_FOLDER, type: "Scene" });
 async function uploadCanvas(cv, name) {
   const blob = await new Promise(res => cv.toBlob(res, "image/webp", 0.86));
@@ -610,8 +610,8 @@ function costRects(costs, cols, rows, want) {
 }
 /** Build (or rebuild) the encounter scene's images, walls and terrain from its saved world position. */
 async function drawEncounterScene(scene) {
-  const st = scene.getFlag(ID, "encounter"), { cx, cy, cols, rows } = st;
-  const plan = planEncounter(await encounterInput(cx, cy, cols, rows), { cx, cy, cols, rows });
+  const st = scene.getFlag(ID, "encounter"), { cx, cy, cols, rows, tune } = st;
+  const plan = planEncounter(await encounterInput(cx, cy, cols, rows), { cx, cy, cols, rows, tune });
   const ground = drawEncounter(plan, "real", ENC_PX, "ground"), canopy = drawEncounter(plan, "real", ENC_PX, "canopy");
   const rev = foundry.utils.randomID(6), slot = st.slot === "a" ? "b" : "a";
   const g = await uploadCanvas(ground, `${scene.id}-enc-${slot}.webp`), c = await uploadCanvas(canopy, `${scene.id}-enc-${slot}-canopy.webp`);
@@ -623,12 +623,15 @@ async function drawEncounterScene(scene) {
      each token beneath it; a fade would turn the whole canopy see-through as soon as any token stood under any tree. */
   await scene.createEmbeddedDocuments("Tile", [{ x: ox + d.sceneWidth / 2, y: oy + d.sceneHeight / 2, width: d.sceneWidth, height: d.sceneHeight, elevation: CANOPY_ELEV, texture: { src: `${c.path}?v=${rev}` },
     occlusion: { modes: [CONST.OCCLUSION_MODES.RADIAL], alpha: 0.2 }, flags: { [ID]: { enc: "canopy" } } }]);
-  /* thick trunks block movement; they don't block sight (PF2e treats a tree as cover, and sight-blocking trunks throw
-     long black wedges across a player's view) */
-  const walls = [], N = CONST.WALL_SENSE_TYPES.NONE;
-  for (const t of plan.feats.trees) { if (t.trunk < TRUNK_WALL_FT || t.u < 0 || t.v < 0 || t.u > plan.Wft || t.v > plan.Hft) continue;
+  /* trunks, graded by thickness. Thin (under TRUNK_THIN ft radius): nothing. Medium: blocks movement, and sight "limited":
+     you can see past one such tree but not past two in a row. Thick (TRUNK_THICK ft and over): blocks movement and sight.
+     Each trunk is a one-way ring (dir LEFT, vertices clockwise on screen): it stops tokens walking in, and a sight line through
+     it counts as one wall, not two (checked on 14.369: behind one medium trunk visible, behind two hidden). */
+  const walls = [], WS = CONST.WALL_SENSE_TYPES, LEFT = CONST.WALL_DIRECTIONS.LEFT;
+  for (const t of plan.feats.trees) { if (t.trunk < TRUNK_THIN || t.u < 0 || t.v < 0 || t.u > plan.Wft || t.v > plan.Hft) continue;
+    const sense = t.trunk >= TRUNK_THICK && !t.dead ? WS.NORMAL : WS.LIMITED;
     const x = ox + t.u * ppf, y = oy + t.v * ppf, r = t.trunk * ppf, pts = [...Array(6)].map((_, k) => [Math.round(x + Math.cos(k * Math.PI / 3) * r), Math.round(y + Math.sin(k * Math.PI / 3) * r)]);
-    for (let k = 0; k < 6; k++) walls.push({ c: [...pts[k], ...pts[(k + 1) % 6]], move: CONST.WALL_MOVEMENT_TYPES.NORMAL, sight: N, light: N, sound: CONST.WALL_SENSE_TYPES.NONE, flags: { [ID]: { enc: "trunk" } } }); }
+    for (let k = 0; k < 6; k++) walls.push({ c: [...pts[k], ...pts[(k + 1) % 6]], move: CONST.WALL_MOVEMENT_TYPES.NORMAL, sight: sense, light: sense, sound: WS.NONE, dir: LEFT, flags: { [ID]: { enc: "trunk" } } }); }
   if (walls.length) await scene.createEmbeddedDocuments("Wall", walls);
   /* difficult terrain */
   const costs = squareCosts(plan), regions = [];
@@ -652,7 +655,7 @@ function partyWorldPoint() {
 }
 /** Make an encounter map at a world point (default: where the party is). The party's members are put in the middle when the
     map is made where the party is, or when party is true; a map planned ahead at a chosen spot leaves the party alone. */
-export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, activate = false, view = false, party } = {}) {
+export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, activate = false, view = false, party, tune } = {}) {
   if (!game.user.isGM) throw new Error("Only a GM can make an encounter map.");
   const chosen = x !== undefined && y !== undefined && Number.isFinite(+x) && Number.isFinite(+y);
   party ??= !chosen;
@@ -663,7 +666,7 @@ export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, 
   name = String(name ?? "").trim().slice(0, 120) || `Encounter: ${src?.name ?? "the wilds"} (${at.x.toFixed(2)}, ${at.y.toFixed(2)})`;
   const scene = await Scene.create({ name, folder: (await encFolder()).id, navigation: false, width: cols * ENC_PX, height: rows * ENC_PX, padding: 0.1,
     grid: { type: CONST.GRID_TYPES.SQUARE, size: ENC_PX, distance: SQ_FT, units: "ft", alpha: 0.18 }, tokenVision: true, fog: { mode: 2 },
-    environment: { globalLight: { enabled: true } }, flags: { [ID]: { encounter: { version: 1, cx: at.x, cy: at.y, cols, rows, from: at.from ?? null } } } });
+    environment: { globalLight: { enabled: true } }, flags: { [ID]: { encounter: { version: 1, cx: at.x, cy: at.y, cols, rows, from: at.from ?? null, tune: tune ?? null } } } });
   const drawn = await drawEncounterScene(scene);
   const members = party ? await placeMembers(scene) : 0;
   if (activate) await scene.activate(); else if (view) await scene.view();
