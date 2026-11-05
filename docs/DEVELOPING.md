@@ -60,7 +60,12 @@ Picked hexes plus a 3-mile margin, at 150 px per mile, capped near 16,000 px (We
 - `updateToken` fires before the token's position changes, and the dragging client sees the old x/y. Use the update's `change`, or the `moveToken` hook's `origin`/`destination`.
 - Hooks that change documents run on the active GM only. The module's own updates carry `{ "lythara-survey-sheet": { sync: true } }` and are ignored by its hooks.
 - DialogV2 strips `<style>` from dialog content, so dialog styles are injected into `document.head` (`encStyle`). Browsers cache module CSS across releases.
-- Scripted moves stop at walls even for the GM.
+- Scripted moves stop at walls even for the GM, unless the update's `movement` option carries `constrainOptions: { ignoreWalls: true, ignoreCost: true }` (what Extend's shift uses).
+- **A region created while a client is redrawing its canvas gets drawn twice.** A scene size or level picture change makes every client viewing the scene run `canvas.draw()`. During that redraw `canvas.regions.objects` is null, but `RegionDocument#_onCreate` still makes an object and draws it, which adds its highlight mesh to `canvas.regions._highlights`. Then the layer's own draw makes a second object for the same document. The first is in no container, so nothing ever destroys it; `_highlights` survives teardown, so its mesh stays on screen across scenes as a 50% white patch (it never gets its tint or visibility refreshed). Checked on 14.370; 14.369 not tested. Two things follow:
+  - `drawEncounterScene` makes every document change first and the update that causes the redraw last. Extend puts the new size and picture in one `scene.update`, so each client redraws once. Keep it that way: never create or delete placeables after that update.
+  - A client can still be mid-redraw for its own reasons (joining, changing scene), so a `canvasReady` hook on every client destroys any region whose document's object is no longer it. `PlaceableObject#destroy` clears `document._object` and sets `document._destroyed`, so the hook restores both for the live object.
+- Since 14.370, a tile created with no name is auto-named from its file, so the canopy tile sets `name` itself.
+- Walls use `CONST.EDGE_SENSE_TYPES` and `CONST.EDGE_DIRECTIONS` (the `WALL_` versions go in V16). `CONST.WALL_MOVEMENT_TYPES` is not deprecated and has no `EDGE_` version. Measured templates are regions in v14, so Extend's shift doesn't list them separately.
 
 ## Performance
 - Blur tree shadows on a small scratch canvas and multiply them in. A blur filter on the full canvas cost a whole-canvas pass per tree.

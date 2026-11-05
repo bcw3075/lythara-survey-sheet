@@ -783,26 +783,31 @@ async function syncEncounterDarkness(scenes = game.scenes.filter(s => s.getFlag(
 }
 Hooks.on("updateWorldTime", () => { if (isActiveGM()) syncEncounterDarkness().catch(e => console.warn(`${ID} | darkness`, e)); });
 
-/** Build (or rebuild) the encounter scene's images, walls and terrain from its saved world position. */
-async function drawEncounterScene(scene) {
-  const st = scene.getFlag(ID, "encounter"), { cx, cy, cols, rows, tune } = st;
+/** Build (or rebuild) the encounter scene's images, walls and terrain from its saved world position.
+    Order matters on a scene someone is viewing: changing the map image or the scene's size makes every client on it redraw its
+    canvas, and a region created while a client's region layer is torn down gets drawn twice, once by the create and once by the
+    redraw. The first copy belongs to nothing and core never removes it (see "Foundry v14 behaviour" in docs/DEVELOPING.md). So
+    every document change comes first, and the one update that causes the redraw comes last.
+    grow (from extendEncounter): { state: new position and size, dims: the scene rectangle after the resize, shift: moves what the GM placed }. */
+async function drawEncounterScene(scene, { grow = null } = {}) {
+  const st = { ...scene.getFlag(ID, "encounter"), ...grow?.state }, { cx, cy, cols, rows, tune } = st;
   const cal = calendarNow(), plan = planEncounter(await encounterInput(cx, cy, cols, rows), { cx, cy, cols, rows, tune, yearFrac: cal.yearFrac, features: st.features ?? [], cover: st.cover ?? null });
   const ground = drawEncounter(plan, "real", ENC_PX, "ground"), canopy = drawEncounter(plan, "real", ENC_PX, "canopy");
   const rev = foundry.utils.randomID(6), slot = st.slot === "a" ? "b" : "a";
   const g = await uploadCanvas(ground, `${scene.id}-enc-${slot}.webp`), c = await uploadCanvas(canopy, `${scene.id}-enc-${slot}-canopy.webp`);
-  await scene.levels.contents[0].update({ background: { src: `${g.path}?v=${rev}` } });
-  const d = scene.dimensions, ox = d.sceneX, oy = d.sceneY, ppf = ENC_PX / SQ_FT;
+  const d = grow?.dims ?? scene.dimensions, ox = d.sceneX, oy = d.sceneY, ppf = ENC_PX / SQ_FT;
   /* clear what this module drew before */
   for (const type of ["Tile", "Wall", "Region", "AmbientLight"]) { const ids = scene.getEmbeddedCollection(type).filter(x => x.getFlag(ID, "enc")).map(x => x.id); if (ids.length) await scene.deleteEmbeddedDocuments(type, ids); }
+  await grow?.shift();
   /* one canopy tile over the whole map (in v14 a tile's x/y is its centre). Radial occlusion cuts a see-through hole around
      each token beneath it; a fade would turn the whole canopy see-through as soon as any token stood under any tree. */
-  await scene.createEmbeddedDocuments("Tile", [{ x: ox + d.sceneWidth / 2, y: oy + d.sceneHeight / 2, width: d.sceneWidth, height: d.sceneHeight, elevation: CANOPY_ELEV, texture: { src: `${c.path}?v=${rev}` },
+  await scene.createEmbeddedDocuments("Tile", [{ name: "Encounter canopy", x: ox + d.sceneWidth / 2, y: oy + d.sceneHeight / 2, width: d.sceneWidth, height: d.sceneHeight, elevation: CANOPY_ELEV, texture: { src: `${c.path}?v=${rev}` },
     occlusion: { modes: [CONST.OCCLUSION_MODES.RADIAL], alpha: 0.2 }, flags: { [ID]: { enc: "canopy" } } }]);
   /* trunks, graded by thickness. Thin (under TRUNK_THIN ft radius): nothing. Medium: blocks movement, and sight "limited":
      you can see past one such tree but not past two in a row. Thick (TRUNK_THICK ft and over): blocks movement and sight.
      Each trunk is a one-way ring (dir LEFT, vertices clockwise on screen): it stops tokens walking in, and a sight line through
      it counts as one wall, not two (checked on 14.369: behind one medium trunk visible, behind two hidden). */
-  const walls = [], WS = CONST.WALL_SENSE_TYPES, LEFT = CONST.WALL_DIRECTIONS.LEFT;
+  const walls = [], WS = CONST.EDGE_SENSE_TYPES, LEFT = CONST.EDGE_DIRECTIONS.LEFT;
   for (const t of plan.feats.trees) { if (t.trunk < TRUNK_THIN || t.u < 0 || t.v < 0 || t.u > plan.Wft || t.v > plan.Hft) continue;
     const sense = t.trunk >= TRUNK_THICK && !t.dead ? WS.NORMAL : WS.LIMITED;
     const x = ox + t.u * ppf, y = oy + t.v * ppf, r = t.trunk * ppf, pts = [...Array(6)].map((_, k) => [Math.round(x + Math.cos(k * Math.PI / 3) * r), Math.round(y + Math.sin(k * Math.PI / 3) * r)]);
@@ -835,6 +840,10 @@ async function drawEncounterScene(scene) {
   if (scene.getFlag("pf2e", "syncDarkness") !== "disabled" || (scene.environment?.globalLight?.darkness?.max ?? 1) > .5)
     await scene.update({ "flags.pf2e.syncDarkness": "disabled", "environment.globalLight.darkness.max": .5 });
   await syncEncounterDarkness([scene]);
+  /* last of all: the new picture and size in one update, so each client redraws once with everything already in place */
+  const level = scene.levels.contents[0], background = { ...level.toObject().background, src: `${g.path}?v=${rev}` };
+  if (grow) await scene.update({ width: d.sceneWidth, height: d.sceneHeight, levels: [{ ...level.toObject(), background }] });
+  else await level.update({ background });
   const sea = plan.season;
   return { date: cal.label, season: { warmth: +sea.T.toFixed(2), leaf: +sea.leaf.toFixed(2), autumn: +sea.autumn.toFixed(2), snow: +sea.snow.toFixed(2) }, darkness: scene.environment?.darknessLevel, trees: plan.feats.trees.length, brush: plan.feats.brush.length, walls: walls.length, difficult: costs.filter(v => v === 1).length, deep: costs.filter(v => v === 2).length, bytes: g.bytes + c.bytes };
 }
@@ -888,19 +897,20 @@ export async function extendEncounter(scene, side, squares = 10) {
   const cols = st.cols + (horiz ? n : 0), rows = st.rows + (horiz ? 0 : n);
   if (cols > ENC_MAX || rows > ENC_MAX) throw new Error(`Encounter maps stop at ${ENC_MAX} squares a side.`);
   const cx = st.cx + (side === "east" ? mi / 2 : side === "west" ? -mi / 2 : 0), cy = st.cy + (side === "north" ? mi / 2 : side === "south" ? -mi / 2 : 0);
-  const before = scene.dimensions;
-  await scene.update({ width: cols * ENC_PX, height: rows * ENC_PX });
-  await scene.setFlag(ID, "encounter", { ...scene.getFlag(ID, "encounter"), cx: +cx.toFixed(5), cy: +cy.toFixed(5), cols, rows });
-  /* the old top-left square moves by the padding change, plus the new strip when growing west or north */
-  const after = scene.dimensions, dx = after.sceneX - before.sceneX + (side === "west" ? n * ENC_PX : 0), dy = after.sceneY - before.sceneY + (side === "north" ? n * ENC_PX : 0);
-  if (dx || dy) for (const type of ["Token", "Note", "Drawing", "MeasuredTemplate", "AmbientLight", "AmbientSound", "Wall", "Tile", "Region"]) {
+  /* where the old top-left square ends up: the padding change, plus the new strip when growing west or north */
+  const before = scene.dimensions, width = cols * ENC_PX, height = rows * ENC_PX, g = scene.grid.calculateDimensions(width, height, scene.padding);
+  const dims = { sceneX: g.x - scene.shiftX, sceneY: g.y - scene.shiftY, sceneWidth: width, sceneHeight: height };
+  const dx = dims.sceneX - before.sceneX + (side === "west" ? n * ENC_PX : 0), dy = dims.sceneY - before.sceneY + (side === "north" ? n * ENC_PX : 0);
+  /* walls before tokens, and tokens ignore walls and terrain: the whole map moves together, nobody is walking anywhere */
+  const shift = async () => { if (dx || dy) for (const type of ["Wall", "Token", "Note", "Drawing", "AmbientLight", "AmbientSound", "Tile", "Region"]) {
     const docs = scene.getEmbeddedCollection(type)?.filter(x => !x.getFlag(ID, "enc")) ?? []; if (!docs.length) continue;
     const ups = docs.map(x => type === "Wall" ? { _id: x.id, c: [x.c[0] + dx, x.c[1] + dy, x.c[2] + dx, x.c[3] + dy] }
       : type === "Region" ? { _id: x.id, shapes: x.toObject().shapes.map(sh => sh.points ? { ...sh, points: sh.points.map((v, i) => v + (i % 2 ? dy : dx)) } : { ...sh, x: (sh.x ?? 0) + dx, y: (sh.y ?? 0) + dy }) }
       : { _id: x.id, x: x.x + dx, y: x.y + dy });
-    await scene.updateEmbeddedDocuments(type, ups, { animate: false, [ID]: { [SYNC]: true } });
-  }
-  const r = await drawEncounterScene(scene);
+    const movement = type === "Token" ? { movement: Object.fromEntries(docs.map(x => [x.id, { constrainOptions: { ignoreWalls: true, ignoreCost: true } }])) } : {};
+    await scene.updateEmbeddedDocuments(type, ups, { animate: false, ...movement, [ID]: { [SYNC]: true } });
+  } };
+  const r = await drawEncounterScene(scene, { grow: { state: { cx: +cx.toFixed(5), cy: +cy.toFixed(5), cols, rows }, dims, shift } });
   return { side, squares: n, cols, rows, shifted: [dx, dy], ...r };
 }
 /** End an encounter: the party goes back to the overland at the spot where the fight was (the sheet covering it, through the
@@ -970,6 +980,16 @@ async function askReturn() {
   if (!ok) return;
   const r = await returnFromEncounter(scene); ui.notifications.info(`The party is back on ${r.to}.`);
 }
+/* A safety net for what the drawing order can't reach: a client that is mid-redraw for its own reasons (joining, changing scene)
+   when a region is created still draws it twice. The copy is the one that isn't the document's object any more. Destroying a
+   placeable also clears its document's links, so those are put back for the live one. Runs on every client. */
+Hooks.on("canvasReady", () => {
+  for (const mesh of [...(canvas.regions?._highlights?.children ?? [])]) {
+    const region = mesh.region, doc = region?.document; if (!doc || region.destroyed || doc._object === region) continue;
+    const live = doc._object, gone = doc._destroyed;
+    region.destroy({ children: true }); doc._object = live; doc._destroyed = gone;
+  }
+});
 /* the module's own group in the left-hand bar (GM only). It works on the notes layer, so pins stay visible and draggable
    with its Select tool. */
 const CONTROL = "lythara";
