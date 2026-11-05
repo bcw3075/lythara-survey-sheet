@@ -104,9 +104,9 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40 }) {
   /* stones and boulders on rough and hill ground, and a few on the creek bed */
   lattice(26, 801, (wx, wy, u, v, r3, r4) => {
     const t = terrainAt(wx, wy), wa = waterAt(u, v);
-    const p = t === T.hills ? .2 : t === T.rough ? .08 : t === T.crag ? .5 : forest(t) ? .04 : wa > -.6 && wa < .2 ? .25 : 0;
+    const p = t === T.hills ? .2 : t === T.rough ? .08 : t === T.crag ? .5 : t === T.snow ? .14 : t === T.bad ? .3 : forest(t) ? .04 : wa > -.6 && wa < .2 ? .25 : 0;
     if (r3 >= p || roadAt(u, v) < 8) return;
-    feats.rocks.push({ u, v, r: (t === T.crag || t === T.hills ? 2 : 1) + r4 * 3, seed: r4 });
+    feats.rocks.push({ u, v, r: (t === T.crag || t === T.hills || t === T.snow ? 2 : 1) + r4 * (t === T.snow ? 4 : 3), seed: r4, t });
   });
   /* ground detail: grass tufts, flowers, leaf litter, ferns, on a 3-ft lattice */
   feats.tufts = [];
@@ -298,7 +298,7 @@ const RAMP_CONIFER = [[18, 38, 30], [26, 54, 38], [38, 72, 46], [54, 94, 56], [8
 const ramp = (R, t) => { t = Math.max(0, Math.min(.9999, t)) * (R.length - 1); const i = Math.floor(t), f = t - i; return mixc(R[i], R[i + 1], f); };
 const REAL = {
   [T.fields]: [[98, 134, 56], [128, 150, 70]], [T.rough]: [[104, 130, 58], [138, 146, 76]], [T.woods]: [[84, 82, 48], [72, 92, 46]], [T.old]: [[70, 68, 40], [60, 80, 40]],
-  [T.damp]: [[80, 98, 54], [112, 116, 70]], [T.hills]: [[136, 126, 88], [116, 120, 68]], [T.bad]: [[96, 88, 82], [80, 74, 70]], [T.crag]: [[138, 134, 126], [112, 110, 104]], [T.snow]: [[232, 234, 236], [214, 220, 226]]
+  [T.damp]: [[80, 98, 54], [112, 116, 70]], [T.hills]: [[136, 126, 88], [116, 120, 68]], [T.bad]: [[96, 88, 82], [80, 74, 70]], [T.crag]: [[138, 134, 126], [112, 110, 104]], [T.snow]: [[222, 228, 238], [206, 214, 228]]
 };
 const GRASS = ["rgba(70,100,38,.42)", "rgba(92,124,46,.4)", "rgba(126,152,64,.38)", "rgba(160,170,92,.32)", "rgba(84,112,44,.4)", "rgba(112,140,58,.38)"];
 const LITTER = ["rgba(150,104,52,.28)", "rgba(170,132,62,.24)", "rgba(122,90,48,.28)", "rgba(190,160,84,.2)", "rgba(98,80,50,.26)"];
@@ -337,7 +337,32 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
         /* moss on the forest floor */
         if (t === T.woods || t === T.old) col = mixc(col, [58, 78, 34], sm(.55, .7, tbl(gx / 7 + 5, gy / 7 + 2)) * .7);
         const sl = bil(SL, u, v);
-        let d = (n3 - .5) * 10 + (ihash(gx * 10, gy * 10) - .5) * 7 + sl * 6;
+        let relief = 6, dAdd = 0;
+        /* wind-packed snow: low ripples across the wind (from the north-west), blue-grey in the hollows, drifts, a little sparkle */
+        if (t === T.snow) {
+          /* (the noise table makes features about 23 units across, so an argument of gx * 23 / F gives features F feet wide) */
+          /* drifts about 40 and 15 ft across, lit from the north-west: bright windward faces, blue lee shade */
+          const hD = (x, y) => tbl(x * .58 + 7, y * .58 + 1) * .6 + tbl(x * 1.5 + 3, y * 1.5 + 5) * .4;
+          const lit = (hD(gx - .7, gy + .7) - hD(gx + .7, gy - .7)) * 3;
+          const along = gx * .8 + gy * .6, across = gy * .8 - gx * .6, bend = tbl(gx * .9 + 3, gy * .9 + 9) * 3;
+          const rip = tbl(along * 1.4 + 2, across * 8 + bend);             /* wind ripples (sastrugi) about 3 ft apart */
+          col = mixc(col, [158, 176, 208], sm(.0, .25, -lit) * .8 + sm(.3, .55, 1 - rip) * .2);
+          col = mixc(col, [252, 252, 254], sm(.0, .2, lit) * .6);
+          dAdd += lit * 30 + (rip - .5) * 18;
+          /* wind-scoured patches, about 50 ft, where rock and frozen scree show through */
+          const sc = tbl(gx * .46 + 50, gy * .46 + 20) * .7 + tbl(gx * 3 + 9, gy * 3 + 31) * .3;
+          if (sc > .64) { const k = sm(.64, .74, sc); col = mixc(col, mixc([126, 120, 110], [86, 82, 78], ihash(gx * 3, gy * 3)), k * .85); dAdd += (ihash(gx * 6, gy * 6) - .5) * 34 * k; }
+          relief = 14; if (ihash(gx * 9, gy * 9) > .996) col = [255, 255, 255];
+        }
+        /* bare crag: cracked, banded stone with dark fissures and lichen */
+        if (t === T.crag || t === T.bad) {
+          const band = tbl(gx * 1.1 + 2, gy * 3 + 5), fis = tbl(gx * 5 + 13, gy * 14 + 4);   /* bands ~20 ft, fissures ~4 ft */
+          col = mixc(col, [92, 90, 86], sm(.45, .75, band) * .45);
+          if (fis < .3) col = mixc(col, [48, 46, 44], (.3 - fis) / .3 * .8);
+          col = mixc(col, [150, 156, 112], sm(.66, .72, tbl(gx * 9 + 31, gy * 9 + 8)) * .35);   /* lichen ~2.5 ft */
+          relief = 12;
+        }
+        let d = (n3 - .5) * 10 + (ihash(gx * 10, gy * 10) - .5) * 7 + sl * relief + dAdd;
         const wa = bil(WF, u, v), rd = bil(RF, u, v);
         if (rd < 6.5) { const e = sm(6.5, 4.8, rd); col = mixc(col, mixc([138, 116, 82], [118, 98, 70], n2), e); if (Math.abs(rd - 2.6) < .7) d -= 18 * e; if (ihash(gx * 4, gy * 4) > .93) d += 24 * e; }
         if (wa > -.55 && wa <= 0) { /* wet mud and pebbles on the banks */
@@ -394,7 +419,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
         P.moveTo(x + r, y); P.ellipse(x, y, r, r * .78, hash(gx, gy, s + 1206) * 3, 0, 6.3); H.moveTo(x - r * .25 + r * .3, y - r * .3); H.arc(x - r * .25, y - r * .3, r * .3, 0, 6.3); }
       c.fillStyle = "rgba(146,138,124,.95)"; c.fill(P1); c.fillStyle = "rgba(118,108,94,.95)"; c.fill(P2); c.fillStyle = "rgba(220,214,200,.45)"; c.fill(H); }
     /* rocks */
-    for (const r of plan.feats.rocks) realRock(c, r.u * ppf, r.v * ppf, r.r * ppf, r.seed);
+    for (const r of plan.feats.rocks) realRock(c, r.u * ppf, r.v * ppf, r.r * ppf, r.seed, r.t === T.snow);
     /* deadfall */
     for (const g of plan.feats.logs) realLog(c, g.u * ppf, g.v * ppf, g.len * ppf, g.w * ppf, g.ang, g.u * 7 + g.v);
     /* tree shadows: crisp, long, in the crown's outline, falling south-east (sun high in the north-west) */
@@ -496,13 +521,14 @@ function willowStrands(c, x, y, R, col, seed, ppf) {
     c.beginPath(); c.moveTo(x + Math.cos(a) * d0, y + Math.sin(a) * d0); c.quadraticCurveTo(x + Math.cos(a + .1) * (d0 + L * .6), y + Math.sin(a + .1) * (d0 + L * .6), x + Math.cos(a + .05) * (d0 + L), y + Math.sin(a + .05) * (d0 + L)); c.stroke(); }
   c.globalAlpha = 1;
 }
-function realRock(c, x, y, R, seed) {
+function realRock(c, x, y, R, seed, snowy = false) {
   const key = Math.round(seed * 999), pts = [];
   for (let k = 0; k < 9; k++) { const a = k / 9 * 6.283 + seed * 3, rr = R * (.75 + .3 * hash(k, key, 3)); pts.push([x + Math.cos(a) * rr, y + Math.sin(a) * rr * .85]); }
   const poly = () => { c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.closePath(); };
   c.save(); c.shadowColor = "rgba(0,0,0,.45)"; c.shadowBlur = R * .5; c.shadowOffsetX = R * .3; c.shadowOffsetY = R * .35; c.fillStyle = "#5a5650"; poly(); c.fill(); c.restore();
   const g = c.createRadialGradient(x - R * .35, y - R * .4, R * .1, x, y, R * 1.1); g.addColorStop(0, "#b8b2a6"); g.addColorStop(.55, "#8a857b"); g.addColorStop(1, "#4e4a44"); c.fillStyle = g; poly(); c.fill();
-  c.fillStyle = "rgba(84,104,48,.45)"; c.beginPath(); c.ellipse(x - R * .1, y - R * .35, R * .5, R * .25, -.3, 0, 7); c.fill();
+  if (snowy) { c.fillStyle = "rgba(240,244,250,.92)"; c.beginPath(); c.ellipse(x - R * .15, y - R * .3, R * .62, R * .4, -.4, 0, 7); c.fill(); }
+  else { c.fillStyle = "rgba(84,104,48,.45)"; c.beginPath(); c.ellipse(x - R * .1, y - R * .35, R * .5, R * .25, -.3, 0, 7); c.fill(); }
   c.strokeStyle = "rgba(40,36,32,.55)"; c.lineWidth = Math.max(1, R * .05); c.beginPath(); c.moveTo(x - R * .4, y + R * .1); c.lineTo(x + R * .05, y - R * .1); c.lineTo(x + R * .35, y + R * .25); c.stroke();
 }
 function realLog(c, x, y, L, W, ang, seed) {

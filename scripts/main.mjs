@@ -423,7 +423,7 @@ const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;",
 async function askEncounter(scene, w) {
   const D = foundry.applications.api.DialogV2, def = `Encounter: ${scene.name} (${w.x.toFixed(2)}, ${w.y.toFixed(2)})`;
   return D.input({ window: { title: "Encounter map here" }, ok: { label: "Make the map" },
-    content: `<p>An encounter map centred on the spot you clicked, ${w.x.toFixed(2)} mi east and ${w.y.toFixed(2)} mi north of the world origin.</p>
+    content: `<p>An encounter map centred on the spot you clicked, ${Math.abs(w.x).toFixed(2)} mi ${w.x < 0 ? "west" : "east"} and ${Math.abs(w.y).toFixed(2)} mi ${w.y < 0 ? "south" : "north"} of the world origin.</p>
       <div class="form-group"><label>Name</label><input type="text" name="name" value="${esc(def)}"></div>
       <div class="form-group"><label>Squares across</label><input type="number" name="cols" value="40" min="10" max="${ENC_MAX}" step="1"></div>
       <div class="form-group"><label>Squares down</label><input type="number" name="rows" value="40" min="10" max="${ENC_MAX}" step="1"></div>
