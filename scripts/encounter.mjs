@@ -187,6 +187,7 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     if (r3 >= p) return;
     let sp = story.speciesAt(wx, wy, t);
     for (let k = 1; !sp && forest(t) && k < 6; k++) sp = story.speciesAt(wx + k * .004, wy - k * .003, t);
+    const stray = !sp;   /* the land names no tree here (extra trees from the sliders): it takes after its neighbours below */
     if (!sp) sp = { kind: t === T.damp ? "willow" : "oakS", col: (t === T.damp ? PAL.willow : PAL.oak)[(r4 * 3) | 0] };
     const [rMin, rMax, tr] = SPECIES[sp.kind] ?? SPECIES.oak, R = (rMin + (rMax - rMin) * r4) * (forest(t) ? 1.02 : .8) * (1 + lush * .22);   /* lush: fuller crowns */
     if (!clearOf(u, v, Math.max(2, tr * 2)) || inF(OPEN_FEATS, u, v, 1.1 + R / 22)) return;   /* crowns stay out of open features */
@@ -195,8 +196,16 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     /* each tree keeps its own timing, a little ahead or behind its neighbours */
     const j = (hash(gx, gy, s + 519) - .5) * .16, Tt = season.T + j, ever = EVERGREEN.has(sp.kind);
     const leaf = ever ? 1 : leafAt(Tt, season.rising), aut = ever ? 0 : autAt(Tt, season.rising), hue = (hash(gx, gy, s + 521) * 4) | 0;
-    feats.trees.push({ u, v, R, trunk: tr * (.8 + r4 * .5), kind: sp.kind, col: sp.col, seed: r3 * 997 + r4, dead, leaf, aut, hue });
+    feats.trees.push({ u, v, R, trunk: tr * (.8 + r4 * .5), kind: sp.kind, col: sp.col, seed: r3 * 997 + r4, dead, leaf, aut, hue, stray, r4, j });
   });
+  /* one area, one kind of wood: a tree the sliders added where the land names none is the same kind as the nearest real tree
+     (within ~450 ft), so turning Tree cover up adds more of what grows there, never a different species */
+  { const anchors = feats.trees.filter(t => !t.stray);
+    for (const t of feats.trees) { if (!t.stray) continue; let best = null, bd = 450 * 450;
+      for (const a of anchors) { const d = (a.u - t.u) ** 2 + (a.v - t.v) ** 2; if (d < bd) { bd = d; best = a; } }
+      if (best && best.kind !== t.kind) { const [a0, a1] = SPECIES[t.kind] ?? SPECIES.oak, [b0, b1, btr] = SPECIES[best.kind] ?? SPECIES.oak, k = t.R / ((a0 + (a1 - a0) * t.r4) || 1);
+        t.R = (b0 + (b1 - b0) * t.r4) * k; t.trunk = btr * (.8 + t.r4 * .5); t.kind = best.kind; t.col = best.col;
+        const ever = EVERGREEN.has(t.kind), Tt = season.T + t.j; t.leaf = ever ? 1 : leafAt(Tt, season.rising); t.aut = ever ? 0 : autAt(Tt, season.rising); } } }
   /* undergrowth: patches where a slow noise runs high; denser on damp ground and at forest edges */
   lattice(6, 611, (wx, wy, u, v, r3) => {
     const t = terrainAt(wx, wy), fx = wx * FT_PER_MI, fy = wy * FT_PER_MI, n = fbm(fx / 34, fy / 34, 3, s + 613);
