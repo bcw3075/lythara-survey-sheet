@@ -39,12 +39,49 @@ export function seasonState(f, elev, y) {
 /* leaves come out between warmth .35 and .65 while warming; while cooling they colour from 1.05 down to .75 and fall between .6 and .4 */
 const leafAt = (T, rising) => rising ? sm(.35, .65, T) : sm(.4, .6, T), autAt = (T, rising) => rising ? 0 : sm(1.05, .75, T);
 export const SUMMER = { f: .5, w: 1, T: 1.2, rising: false, leaf: 1, autumn: 0, snow: 0, fresh: 0, dormant: 0 };
-const EVERGREEN = new Set(["pine", "hemlock"]);
+const EVERGREEN = new Set(["pine", "hemlock"]), OPEN_FEATS = ["clearing", "camp", "stones", "ruins", "cave", "outcrop", "lake", "pond"], BUILT = ["camp", "stones", "ruins", "cave", "outcrop", "fallen"];
+/* ---------- placed features, from plain-language notes ----------
+   "a pond in the north-east, a stand of dead trees, and a cave entrance on the west side". Each part is matched to a known
+   feature and an optional place on the map; anything not recognised is returned so it can be passed to Claude. */
+export const FEATURES = {
+  lake: { r: 55, words: /\blakes?\b|\bmere\b|\bloch\b/ }, pond: { r: 24, words: /\bponds?\b|\bpools?\b|\btarns?\b|\bspring\b/ },
+  stream: { r: 0, words: /\bstreams?\b|\bbrooks?\b|\bcreeks?\b|\brivulet\b|\bbeck\b/ },
+  fallen: { r: 0, words: /\bfallen\b|\btoppled\b|\bgiant log\b|\bdowned tree\b|\bdeadfall\b/ },
+  dead: { r: 42, words: /\bdead\b|\bsnags?\b|\bblight(ed)?\b|\bdying\b|\bwithered\b|\brotten\b/ },
+  clearing: { r: 38, words: /\bclearing\b|\bglade\b|\bmeadow\b|\bopen ground\b/ },
+  cave: { r: 26, words: /\bcaves?\b|\bcavern\b|\bden\b|\btunnel\b|\bgrotto\b|\bmine entrance\b/ },
+  stones: { r: 28, words: /\bstanding stones?\b|\bstone circle\b|\bmenhirs?\b|\bmonoliths?\b|\bcairns?\b|\bdolmen\b/ },
+  ruins: { r: 30, words: /\bruins?\b|\bruined\b|\bfoundations?\b|\bcrumbling\b|\bold walls?\b|\bwatchtower\b/ },
+  camp: { r: 22, words: /\bcamp(site|fire)?\b|\bfire ?pit\b|\bbonfire\b/ },
+  outcrop: { r: 20, words: /\boutcrop\b|\bcrag\b|\btor\b|\brock face\b|\bcliff\b|\bledge\b/ },
+  boulders: { r: 32, words: /\bboulders?\b|\brock field\b|\bscree\b|\brocks\b|\bstones\b/ }
+};
+const PLACE_WORDS = [[/north[ -]?east|\bne\b/, [.78, .22]], [/north[ -]?west|\bnw\b/, [.22, .22]], [/south[ -]?east|\bse\b/, [.78, .78]], [/south[ -]?west|\bsw\b/, [.22, .78]],
+  [/\bnorth/, [.5, .2]], [/\bsouth/, [.5, .8]], [/\beast/, [.8, .5]], [/\bwest/, [.2, .5]], [/\bcent(er|re)\b|\bmiddle\b/, [.5, .5]]];
+const SPOTS = [[.3, .3], [.7, .7], [.7, .3], [.3, .7], [.5, .22], [.22, .5], [.78, .5], [.5, .78]];
+const FACING = [[/facing north|opens? north|north[- ]facing/, -Math.PI / 2], [/facing south|opens? south|south[- ]facing/, Math.PI / 2], [/facing east|opens? east|east[- ]facing/, 0], [/facing west|opens? west|west[- ]facing/, Math.PI]];
+/** Read notes into features placed by map fraction (fx east, fy south, 0..1). Returns { features, unknown }. */
+export function parseNotes(text) {
+  const parts = String(text ?? "").toLowerCase().split(/[;,\n]|\band\b|\bplus\b|\balso\b|\bwith\b/).map(t => t.trim()).filter(t => t.length > 1);
+  const features = [], unknown = []; let spot = 0;
+  for (const part of parts) {
+    const kind = Object.keys(FEATURES).find(k => FEATURES[k].words.test(part));
+    if (!kind) { unknown.push(part); continue; }
+    const place = PLACE_WORDS.find(([re]) => re.test(part.replace(/facing \w+|opens? \w+|\w+[- ]facing/, "")));
+    let [fx, fy] = place ? place[1] : SPOTS[spot++ % SPOTS.length];
+    if (/\bedge\b|\bborder\b|\bfar\b/.test(part) && place) { fx = .5 + (fx - .5) * 1.5; fy = .5 + (fy - .5) * 1.5; }
+    const size = /\bsmall\b|\blittle\b|\btiny\b/.test(part) ? .65 : /\bhuge\b|\bgiant\b|\bvast\b|\benormous\b/.test(part) && kind !== "fallen" ? 1.8 : /\blarge\b|\bbig\b|\bwide\b/.test(part) ? 1.4 : 1;
+    const face = FACING.find(([re]) => re.test(part));
+    const ang = face ? face[1] : /north[- ]?south|n-s|running north|running south/.test(part) ? Math.PI / 2 : /east[- ]?west|e-w|running east|running west/.test(part) ? 0 : null;
+    features.push({ kind, fx: Math.max(.05, Math.min(.95, fx)), fy: Math.max(.05, Math.min(.95, fy)), size, ang, text: part });
+  }
+  return { features, unknown };
+}
 export const TUNE_KEYS = ["trees", "brush", "rocks", "water", "relief", "decay"];
 const tuneOf = t => Object.fromEntries(TUNE_KEYS.map(k => [k, Math.max(-1, Math.min(1, Number(t?.[k]) || 0))]));
 /* a chance p pushed up toward 1 or down toward 0 by a slider; open ground gains a little cover too when pushed up */
 const nudge = (p, k, open = 0) => k >= 0 ? Math.min(1, p + (1 - p) * k * .85 + open * k) : p * (1 + k);
-export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFrac }) {
+export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFrac, features }) {
   tune = tuneOf(tune);
   const Wft = cols * SQ_FT, Hft = rows * SQ_FT, wmi = Wft / FT_PER_MI, hmi = Hft / FT_PER_MI;
   const x0 = cx - wmi / 2, y1 = cy + hmi / 2;
@@ -84,13 +121,33 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     const fine = meander(l.course, l.kind === "road" || l.kind === "track" ? .04 : .16, 3, s + 900 + l.id.length).map(p => L(p.x, p.y));
     lines.push({ id: l.id, kind: l.kind, pts: fine.filter((p, i, a) => { const q = a[Math.max(0, i - 1)], r = a[Math.min(a.length - 1, i + 1)]; return [p, q, r].some(z => z.u > -400 && z.u < Wft + 400 && z.v > -400 && z.v < Hft + 400); }) });
   }
+  /* placed features: world miles and feet, so they stay put when the map grows */
+  const FT = (features ?? []).map((f, i) => { const p = L(f.x, f.y), def = FEATURES[f.kind] ?? { r: 20 }; return { ...f, i, u: p.u, v: p.v, r: (f.r ?? def.r) * (f.size ?? 1) }; });
+  const fdist = (f, u, v) => { const n = fbm((x0 * FT_PER_MI + u) / 22, (y1 * FT_PER_MI - v) / 22, 2, s + 700 + f.i * 13); return Math.hypot(u - f.u, v - f.v) / (f.r * (.78 + n * .44)); };
+  const inF = (kinds, u, v, k = 1) => FT.some(f => kinds.includes(f.kind) && f.r > 0 && fdist(f, u, v) < k);
+  for (const f of FT) if (f.kind === "stream") {   /* a stream across the whole map through the spot */
+    const a = f.ang ?? (hash(f.i, 3, s + 711) * Math.PI), L0 = Math.max(Wft, Hft) * 1.2, pts = [];
+    for (let k = -6; k <= 6; k++) { const d = k / 6 * L0; pts.push(W(f.u + Math.cos(a) * d, f.v + Math.sin(a) * d)); }
+    lines.push({ id: `feat-stream-${f.i}`, kind: "creek", pts: meander(pts, .16, 3, s + 720 + f.i).map(p => L(p.x, p.y)) });
+  }
   const water = lines.filter(l => l.kind === "creek" || l.kind === "river"), roads = lines.filter(l => l.kind === "road" || l.kind === "track");
   const wMul = 2 ** tune.water, halfWidth = (l, u, v) => { const n = fbm((x0 * FT_PER_MI + u) / 55, (y1 * FT_PER_MI - v) / 55, 3, s + 333); return (l.kind === "river" ? 14 + 10 * n : 2.5 + 6 * n * n) * wMul; };
   /* close-range wander: the line is read through a slow warp, so creeks and tracks bend every few dozen feet */
   const wob = (u, v, amp, sc, k) => { const gx = x0 * FT_PER_MI + u, gy = y1 * FT_PER_MI - v; return [u + (fbm(gx / sc, gy / sc, 3, s + k) - .5) * 2 * amp, v + (fbm(gx / sc, gy / sc, 3, s + k + 5) - .5) * 2 * amp]; };
   const lineDist = (l, u, v) => { let best = 1e9; for (let i = 1; i < l.pts.length; i++) best = Math.min(best, segDist(u, v, l.pts[i - 1], l.pts[i])); return best; };
   /* water depth signal: <0 dry; 0..1 shallow edge to channel */
-  function waterAt(u, v) { let w = -1; const [a, b] = wob(u, v, 9, 70, 351); for (const l of water) { const hw = halfWidth(l, u, v), d = lineDist(l, a, b); w = Math.max(w, 1 - d / hw); } return w; }
+  function waterAt(u, v) { let w = -1; const [a, b] = wob(u, v, 9, 70, 351); for (const l of water) { const hw = halfWidth(l, u, v), d = lineDist(l, a, b); w = Math.max(w, 1 - d / hw); }
+    for (const f of FT) if (f.kind === "lake" || f.kind === "pond") w = Math.max(w, (1 - fdist(f, u, v)) * (f.kind === "lake" ? 1.3 : .95) * Math.max(.4, f.size ?? 1) ** .3);
+    return w; }
+  /* built features step off water: the nearest dry spot within ~150 ft of where they were asked for */
+  const placedB = [];
+  for (const f of FT) if (BUILT.includes(f.kind)) {
+    const crowd = (u, v) => placedB.some(g => Math.hypot(u - g.u, v - g.v) < (f.r + g.r) * .9 + 6);
+    const wet = (u, v) => crowd(u, v) || [[0, 0], ...[...Array(8)].map((_, k) => [Math.cos(k * .785) * f.r * .8, Math.sin(k * .785) * f.r * .8])].some(([a, b]) => waterAt(u + a, v + b) > -.35);
+    if (!wet(f.u, f.v)) { placedB.push(f); continue; }
+    search: for (let d = 15; d <= 150; d += 15) for (let k = 0; k < 12; k++) { const a = k / 12 * 6.283 + d * .1, u = f.u + Math.cos(a) * d, v = f.v + Math.sin(a) * d; if (u < 10 || v < 10 || u > Wft - 10 || v > Hft - 10) continue; if (!wet(u, v)) { f.u = u; f.v = v; break search; } }
+    placedB.push(f);
+  }
   function roadAt(u, v) { let r = 1e9; const [a, b] = wob(u, v, 4, 90, 361); for (const l of roads) r = Math.min(r, lineDist(l, a, b)); return r; }
 
   /* features on world lattices (feet from the world origin) */
@@ -114,8 +171,8 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     for (let k = 1; !sp && forest(t) && k < 6; k++) sp = story.speciesAt(wx + k * .004, wy - k * .003, t);
     if (!sp) sp = { kind: t === T.damp ? "willow" : "oakS", col: (t === T.damp ? PAL.willow : PAL.oak)[(r4 * 3) | 0] };
     const [rMin, rMax, tr] = SPECIES[sp.kind] ?? SPECIES.oak, R = (rMin + (rMax - rMin) * r4) * (forest(t) ? 1.02 : .8);
-    if (!clearOf(u, v, Math.max(2, tr * 2))) return;
-    const dead = hash(gx, gy, s + 517) < tune.decay * .7;   /* decay kills trees outright */
+    if (!clearOf(u, v, Math.max(2, tr * 2)) || inF(OPEN_FEATS, u, v, 1.1 + R / 22)) return;   /* crowns stay out of open features */
+    const dead = hash(gx, gy, s + 517) < tune.decay * .7 || inF(["dead"], u, v) && hash(gx, gy, s + 523) < .85;   /* decay kills trees outright */
     /* each tree keeps its own timing, a little ahead or behind its neighbours */
     const j = (hash(gx, gy, s + 519) - .5) * .16, Tt = season.T + j, ever = EVERGREEN.has(sp.kind);
     const leaf = ever ? 1 : leafAt(Tt, season.rising), aut = ever ? 0 : autAt(Tt, season.rising), hue = (hash(gx, gy, s + 521) * 4) | 0;
@@ -126,31 +183,49 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     const t = terrainAt(wx, wy), fx = wx * FT_PER_MI, fy = wy * FT_PER_MI, n = fbm(fx / 34, fy / 34, 3, s + 613);
     const th0 = t === T.damp ? .5 : t === T.woods ? .58 : t === T.old ? .64 : t === T.rough ? .66 : t === T.hills ? .7 : t === T.fields ? .78 : 1;
     const th = th0 >= 1 ? 1 : th0 - tune.brush * .2;
-    if (n < th || r3 > .8 || !clearOf(u, v, 2)) return;
+    if (n < th || r3 > .8 || !clearOf(u, v, 2) || inF(OPEN_FEATS, u, v, .95)) return;
     const Tb = season.T + .05 + (r3 - .4) * .12;   /* shrubs leaf out a little before the trees */
     feats.brush.push({ u, v, r: 2.2 + r3 * 2.4, t, leaf: leafAt(Tb, season.rising), aut: autAt(Tb, season.rising), hue: (r3 * 10 % 4) | 0 });
   });
   /* deadfall in the woods */
   lattice(55, 701, (wx, wy, u, v, r3, r4) => {
-    const t = terrainAt(wx, wy); if (!(forest(t) && r3 < (t === T.old ? .3 : .16) * (1 + Math.max(0, tune.decay) * 2)) || !clearOf(u, v, 8)) return;
+    const t = terrainAt(wx, wy), dz = inF(["dead"], u, v); if (!((forest(t) || dz) && r3 < (t === T.old ? .3 : .16) * (1 + Math.max(0, tune.decay) * 2) * (dz ? 3 : 1)) || !clearOf(u, v, 8) || inF(OPEN_FEATS, u, v, 1.1)) return;
     feats.logs.push({ u, v, len: 12 + r4 * 16, ang: r3 * 37 % Math.PI, w: 1.4 + r4 * 1.4 });
   });
   /* stones and boulders on rough and hill ground, and a few on the creek bed */
   lattice(26, 801, (wx, wy, u, v, r3, r4) => {
     const t = terrainAt(wx, wy), wa = waterAt(u, v);
     const p = t === T.hills ? .2 : t === T.rough ? .08 : t === T.crag ? .5 : t === T.snow ? .14 : t === T.bad ? .3 : forest(t) ? .04 : wa > -.6 && wa < .2 ? .25 : 0;
-    if (r3 >= nudge(p, tune.rocks, t === T.fields || forest(t) ? .03 : .12) || roadAt(u, v) < 8) return;
+    if (r3 >= nudge(p, tune.rocks, t === T.fields || forest(t) ? .03 : .12) || roadAt(u, v) < 8 || inF(["camp", "clearing"], u, v)) return;
     feats.rocks.push({ u, v, r: (t === T.crag || t === T.hills || t === T.snow ? 2 : 1) + r4 * (t === T.snow ? 4 : 3), seed: r4, t });
   });
+  /* boulder fields: a closer lattice inside the feature */
+  lattice(9, 851, (wx, wy, u, v, r3, r4) => { if (!inF(["boulders"], u, v) || r3 > .42 || waterAt(u, v) > -.2) return; feats.rocks.push({ u, v, r: 1.5 + r4 * 3.5, seed: r4, t: terrainAt(wx, wy), big: true }); });
+  /* the built and shaped features, each from its own seeded generator */
+  feats.outcrops = []; feats.stones = []; feats.ruins = []; feats.camps = []; feats.fallen = []; feats.caves = [];
+  for (const f of FT) {
+    const r_ = rng(Math.round((f.x * 1e4 + f.y * 3e3) * 97) + 31 + f.i), toC = Math.atan2(Hft / 2 - f.v, Wft / 2 - f.u);
+    if (f.kind === "outcrop") { const n = 4 + Math.floor(r_() * 4); for (let k = 0; k < n; k++) { const a = r_() * 6.283, d = Math.sqrt(r_()) * f.r * .55; feats.outcrops.push({ u: f.u + Math.cos(a) * d, v: f.v + Math.sin(a) * d, r: 4 + r_() * 5 * (f.size ?? 1), seed: r_() }); } }
+    if (f.kind === "stones") { const n = 7 + Math.floor(r_() * 3), R = f.r * .62, a0 = r_() * 6.283; for (let k = 0; k < n; k++) { if (r_() < .12) continue; const a = a0 + k / n * 6.283; feats.stones.push({ u: f.u + Math.cos(a) * R, v: f.v + Math.sin(a) * R, w: 4.5 + r_() * 1.8, h: 2.2 + r_() * .9, ang: a + Math.PI / 2 + (r_() - .5) * .4, fallen: r_() < .18 }); }
+      if (r_() < .7) feats.stones.push({ u: f.u, v: f.v, w: 6, h: 3.5, ang: r_() * 3, altar: true }); }
+    if (f.kind === "ruins") { const a = r_() * Math.PI, w = f.r * 1.3, h = f.r * (.8 + r_() * .3), ca = Math.cos(a), sa = Math.sin(a), P = (x, y) => ({ u: f.u + x * ca - y * sa, v: f.v + x * sa + y * ca });
+      const corners = [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]];
+      for (let k = 0; k < 4; k++) { const [ax, ay] = corners[k], [bx, by] = corners[(k + 1) % 4], len = Math.hypot(bx - ax, by - ay), n = Math.max(2, Math.round(len / 9));
+        for (let q = 0; q < n; q++) { if (r_() < .3) continue; const t0 = q / n + .02, t1 = (q + 1) / n - .02 - r_() * .25 / n; feats.ruins.push({ a: P(ax + (bx - ax) * t0, ay + (by - ay) * t0), b: P(ax + (bx - ax) * t1, ay + (by - ay) * t1), th: 2 + r_() * .6 }); } }
+      for (let k = 0; k < 14; k++) { const q = P((r_() - .5) * w * 1.2, (r_() - .5) * h * 1.2); feats.rocks.push({ u: q.u, v: q.v, r: .8 + r_() * 1.6, seed: r_(), t: T.rough }); } }
+    if (f.kind === "camp") feats.camps.push({ u: f.u, v: f.v, ang: r_() * 6.283, seed: r_() });
+    if (f.kind === "fallen") { const a = f.ang ?? r_() * Math.PI, len = 48 + r_() * 22 * (f.size ?? 1); feats.fallen.push({ u: f.u, v: f.v, len, w: 4 + r_() * 1.5, ang: a, seed: r_() }); }
+    if (f.kind === "cave") feats.caves.push({ u: f.u, v: f.v, r: f.r, face: f.ang ?? toC, seed: r_() });
+  }
   /* ground detail: grass tufts, flowers, leaf litter, ferns, on a 3-ft lattice */
   feats.tufts = [];
   lattice(3, 901, (wx, wy, u, v, r3, r4) => {
     if (u < -4 || v < -4 || u > Wft + 4 || v > Hft + 4) return;
-    const t = terrainAt(wx, wy), wa = waterAt(u, v); if (wa > -.15 || roadAt(u, v) < 6) return;
+    const t = terrainAt(wx, wy), wa = waterAt(u, v); if (wa > -.15 || roadAt(u, v) < 6 || inF(["camp", "ruins", "cave"], u, v, .8)) return;
     const kind = forest(t) ? (r3 < (t === T.old ? .16 : .1) ? "fern" : r3 < .38 ? "leaf" : null) : (t === T.fields || t === T.rough || t === T.hills || t === T.damp) ? (r3 < .34 ? "tuft" : r3 < (t === T.fields ? .37 : .355) ? "flower" : null) : null;
     if (kind) feats.tufts.push({ u, v, kind, r: r4, t });
   });
-  return { cols, rows, Wft, Hft, x0, y1, cx, cy, tune, season, land, terrainAt, elevAt, waterAt, roadAt, W, L, lines, feats };
+  return { cols, rows, Wft, Hft, x0, y1, cx, cy, tune, season, placed: FT, inF, land, terrainAt, elevAt, waterAt, roadAt, W, L, lines, feats };
 }
 
 function segDist(px, py, a, b) { const dx = b.u - a.u, dy = b.v - a.v, l2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((px - a.u) * dx + (py - a.v) * dy) / l2)); return Math.hypot(px - a.u - t * dx, py - a.v - t * dy); }
@@ -490,6 +565,13 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
       for (const f of florets(t)) { const fx = (x - ox + f.x * R) / q, fy = (y - oy + f.y * R) / q, fr = f.r * R / q; k.moveTo(fx + fr, fy); k.arc(fx, fy, fr, 0, 7); } k.fill(); k.filter = "none";
       c.drawImage(sc.cv, 0, 0, s2, s2, ox, oy, s2 * q, s2 * q); }
     c.restore();
+    /* placed features, ground level, each with its own shadow */
+    for (const g of plan.feats.fallen ?? []) giantLog(c, g.u * ppf, g.v * ppf, g.len * ppf, g.w * ppf, g.ang, g.seed, ppf);
+    for (const q of plan.feats.camps ?? []) campsite(c, q.u * ppf, q.v * ppf, q.ang, q.seed, ppf);
+    for (const w of plan.feats.ruins ?? []) ruinWall(c, w.a.u * ppf, w.a.v * ppf, w.b.u * ppf, w.b.v * ppf, w.th * ppf, ppf);
+    for (const q of plan.feats.stones ?? []) standingStone(c, q.u * ppf, q.v * ppf, q.w * ppf, q.h * ppf, q.ang, q, ppf);
+    for (const q of plan.feats.caves ?? []) caveMouth(c, q.u * ppf, q.v * ppf, q.r * ppf, q.face, q.seed, ppf, sea.snow > .4);
+    for (const r of plan.feats.outcrops ?? []) realRock(c, r.u * ppf, r.v * ppf, r.r * ppf, r.seed, sea.snow > .4);
     /* trunks and root flare, seen when the canopy above fades */
     for (const t of plan.feats.trees) { const x = t.u * ppf, y = t.v * ppf, r = Math.max(t.trunk, .5) * ppf;
       c.fillStyle = "rgba(10,8,4,.35)"; c.beginPath(); c.arc(x + r * .3, y + r * .35, r * 1.5, 0, 7); c.fill();
@@ -619,6 +701,75 @@ function realRock(c, x, y, R, seed, snowy = false) {
   if (snowy) { c.fillStyle = "rgba(240,244,250,.92)"; c.beginPath(); c.ellipse(x - R * .15, y - R * .3, R * .62, R * .4, -.4, 0, 7); c.fill(); }
   else { c.fillStyle = "rgba(84,104,48,.45)"; c.beginPath(); c.ellipse(x - R * .1, y - R * .35, R * .5, R * .25, -.3, 0, 7); c.fill(); }
   c.strokeStyle = "rgba(40,36,32,.55)"; c.lineWidth = Math.max(1, R * .05); c.beginPath(); c.moveTo(x - R * .4, y + R * .1); c.lineTo(x + R * .05, y - R * .1); c.lineTo(x + R * .35, y + R * .25); c.stroke();
+}
+/* a giant fallen tree: a long trunk with bark ridges, a torn-up root plate at one end and broken limbs */
+function giantLog(c, x, y, L, W, ang, seed, ppf) {
+  const r_ = rng(Math.round(seed * 9973) + 81), ca = Math.cos(ang), sa = Math.sin(ang), dx = ca * L / 2, dy = sa * L / 2, nx = -sa, ny = ca;
+  c.save(); c.globalCompositeOperation = "multiply"; c.strokeStyle = "rgba(120,124,136,.6)"; c.lineCap = "round"; c.lineWidth = W * 1.05; c.beginPath(); c.moveTo(x - dx + W * .5, y - dy + W * .6); c.lineTo(x + dx + W * .5, y + dy + W * .6); c.stroke(); c.restore();
+  /* limbs */
+  c.lineCap = "round"; for (let k = 0; k < 7; k++) { const t = .2 + r_() * .7, side = r_() < .5 ? -1 : 1, bx = x - dx + dx * 2 * t, by = y - dy + dy * 2 * t, a = ang + side * (.7 + r_() * .6), l = W * (1.2 + r_() * 1.6);
+    c.strokeStyle = "#3a2c1e"; c.lineWidth = W * .22; c.beginPath(); c.moveTo(bx, by); c.lineTo(bx + Math.cos(a) * l, by + Math.sin(a) * l); c.stroke(); }
+  /* trunk: dark edge, bark body, lit ridge along the north-west side */
+  c.strokeStyle = "#2b2016"; c.lineWidth = W; c.beginPath(); c.moveTo(x - dx, y - dy); c.lineTo(x + dx, y + dy); c.stroke();
+  c.strokeStyle = "#5c4630"; c.lineWidth = W * .8; c.stroke();
+  c.strokeStyle = "rgba(150,122,88,.7)"; c.lineWidth = W * .22; c.beginPath(); c.moveTo(x - dx - nx * W * .18, y - dy - ny * W * .18); c.lineTo(x + dx - nx * W * .18, y + dy - ny * W * .18); c.stroke();
+  c.strokeStyle = "rgba(30,22,14,.45)"; c.lineWidth = Math.max(1, ppf * .12); c.beginPath();
+  for (let k = 0; k < 26; k++) { const t = r_(), o = (r_() - .5) * W * .6, bx = x - dx + dx * 2 * t + nx * o, by = y - dy + dy * 2 * t + ny * o; c.moveTo(bx, by); c.lineTo(bx + ca * W * (.6 + r_()), by + sa * W * (.6 + r_())); } c.stroke();
+  /* root plate standing up at the base */
+  const rx = x - dx - ca * W * .3, ry = y - dy - sa * W * .3, R = W * 1.6;
+  c.fillStyle = "rgba(0,0,0,.3)"; c.beginPath(); c.ellipse(rx + R * .3, ry + R * .35, R, R * .55, ang + Math.PI / 2, 0, 7); c.fill();
+  c.fillStyle = "#4a3a2a"; c.beginPath(); c.ellipse(rx, ry, R * .45, R, ang, 0, 7); c.fill();
+  c.strokeStyle = "#2a2018"; c.lineWidth = Math.max(1, ppf * .25); c.beginPath(); for (let k = 0; k < 11; k++) { const a = ang + Math.PI + (r_() - .5) * 2.6, l = R * (.8 + r_() * .9); c.moveTo(rx, ry); c.quadraticCurveTo(rx + Math.cos(a) * l * .5, ry + Math.sin(a) * l * .5 + (r_() - .5) * R * .4, rx + Math.cos(a) * l, ry + Math.sin(a) * l); } c.stroke();
+  c.fillStyle = "rgba(110,86,56,.85)"; c.beginPath(); c.ellipse(rx - ca * R * .1, ry - sa * R * .1, R * .25, R * .7, ang, 0, 7); c.fill();
+}
+/* a campsite: a ring of fire stones round ash and embers, bedrolls, a log seat and trampled ground */
+function campsite(c, x, y, ang, seed, ppf) {
+  const r_ = rng(Math.round(seed * 9973) + 91), f = ppf;
+  const g0 = c.createRadialGradient(x, y, f, x, y, 9 * f); g0.addColorStop(0, "rgba(96,78,54,.55)"); g0.addColorStop(1, "rgba(96,78,54,0)"); c.fillStyle = g0; c.beginPath(); c.arc(x, y, 9 * f, 0, 7); c.fill();
+  c.fillStyle = "#2a2622"; c.beginPath(); c.arc(x, y, 1.6 * f, 0, 7); c.fill();
+  const g1 = c.createRadialGradient(x, y, 0, x, y, 1.4 * f); g1.addColorStop(0, "rgba(255,196,96,.95)"); g1.addColorStop(.45, "rgba(214,90,30,.85)"); g1.addColorStop(1, "rgba(60,30,20,.2)"); c.fillStyle = g1; c.beginPath(); c.arc(x, y, 1.4 * f, 0, 7); c.fill();
+  for (let k = 0; k < 9; k++) { const a = k / 9 * 6.283 + r_() * .3; realRock(c, x + Math.cos(a) * 1.9 * f, y + Math.sin(a) * 1.9 * f, (.45 + r_() * .2) * f, r_()); }
+  const rolls = [["#6b4a3a", "#8a6a50"], ["#4a5a6a", "#6a7a8a"], ["#5a5a3a", "#7a7a50"]];
+  for (let k = 0; k < 3; k++) { const a = ang + k * 2.1 + (r_() - .5) * .4, d = 6.2 * f, bx = x + Math.cos(a) * d, by = y + Math.sin(a) * d, [dk, lt] = rolls[k];
+    c.save(); c.translate(bx, by); c.rotate(a + Math.PI / 2); c.fillStyle = "rgba(0,0,0,.25)"; c.fillRect(-1.1 * f + 3, -3 * f + 3, 2.2 * f, 6 * f); c.fillStyle = dk; c.fillRect(-1.1 * f, -3 * f, 2.2 * f, 6 * f); c.fillStyle = lt; c.fillRect(-1 * f, -2.9 * f, 2 * f, 1.8 * f); c.restore(); }
+  realLog(c, x + Math.cos(ang - 1) * 5 * f, y + Math.sin(ang - 1) * 5 * f, 6 * f, 1.2 * f, ang - 1 + Math.PI / 2, seed);
+}
+/* a length of ruined wall: dressed stone blocks, broken ends, its shadow cast south-east */
+function ruinWall(c, ax, ay, bx, by, th, ppf) {
+  const L = Math.hypot(bx - ax, by - ay), ux = (bx - ax) / L, uy = (by - ay) / L, nx = -uy, ny = ux;
+  c.lineCap = "butt";
+  c.save(); c.globalCompositeOperation = "multiply"; c.strokeStyle = "rgba(118,122,134,.7)"; c.lineWidth = th; c.beginPath(); c.moveTo(ax + th * .7, ay + th * .8); c.lineTo(bx + th * .7, by + th * .8); c.stroke(); c.restore();
+  c.strokeStyle = "#4e4a44"; c.lineWidth = th; c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by); c.stroke();
+  c.strokeStyle = "#8f897d"; c.lineWidth = th * .78; c.stroke();
+  c.strokeStyle = "rgba(180,172,158,.8)"; c.lineWidth = th * .2; c.beginPath(); c.moveTo(ax - nx * th * .22, ay - ny * th * .22); c.lineTo(bx - nx * th * .22, by - ny * th * .22); c.stroke();
+  c.strokeStyle = "rgba(50,46,40,.6)"; c.lineWidth = Math.max(1, ppf * .08); c.beginPath(); const step = th * 1.1;
+  for (let d = step; d < L; d += step) { const px = ax + ux * d, py = ay + uy * d, o = (Math.round(d / step) % 2) * .5; c.moveTo(px + nx * th * .4, py + ny * th * .4); c.lineTo(px - nx * th * (o ? 0 : .4), py - ny * th * (o ? 0 : .4)); }
+  c.moveTo(ax, ay); c.lineTo(bx, by); c.stroke();
+}
+/* a standing stone: a tall slab seen from above, with a long shadow; fallen ones lie flat and longer; an altar is a low wide block */
+function standingStone(c, x, y, w, h, ang, q, ppf) {
+  const len = q.fallen ? w * 1.8 : w, wid = q.altar ? h : h;
+  c.save(); c.translate(x, y); c.rotate(ang);
+  if (!q.fallen && !q.altar) { c.save(); c.rotate(-ang); c.globalCompositeOperation = "multiply"; c.fillStyle = "rgba(110,114,128,.75)"; c.beginPath(); c.moveTo(-w * .4, 0); c.lineTo(w * .4, 0); c.lineTo(w * 1.2, w * 1.35); c.lineTo(w * .65, w * 1.55); c.closePath(); c.fill(); c.restore(); }
+  else { c.fillStyle = "rgba(0,0,0,.3)"; c.fillRect(-len / 2 + 3, -wid / 2 + 3, len, wid); }
+  const g = c.createLinearGradient(-len / 2, -wid / 2, len / 2, wid / 2); g.addColorStop(0, "#b6b0a4"); g.addColorStop(.6, "#8a857b"); g.addColorStop(1, "#5c5850");
+  c.fillStyle = "#3e3b36"; c.beginPath(); c.roundRect(-len / 2 - 1, -wid / 2 - 1, len + 2, wid + 2, wid * .35); c.fill();
+  c.fillStyle = g; c.beginPath(); c.roundRect(-len / 2, -wid / 2, len, wid, wid * .35); c.fill();
+  c.fillStyle = "rgba(96,112,64,.45)"; c.beginPath(); c.ellipse(-len * .15, -wid * .1, len * .2, wid * .25, .3, 0, 7); c.fill();
+  if (q.altar) { c.strokeStyle = "rgba(60,30,30,.5)"; c.lineWidth = Math.max(1, ppf * .15); c.strokeRect(-len * .3, -wid * .25, len * .6, wid * .5); }
+  c.restore();
+}
+/* a cave entrance: a horseshoe of rock open toward the map, rising behind into a mass of stone, with a dark mouth */
+function caveMouth(c, x, y, R, face, seed, ppf, snowy) {
+  const r_ = rng(Math.round(seed * 9973) + 97), back = face + Math.PI;
+  /* the rock mass behind */
+  for (let k = 0; k < 14; k++) { const a = back + (r_() - .5) * 3.4, d = R * (.45 + r_() * .5); realRock(c, x + Math.cos(a) * d, y + Math.sin(a) * d, R * (.22 + r_() * .2), r_(), snowy); }
+  /* the mouth: a dark throat going in */
+  const mx = x + Math.cos(face) * R * .05, my = y + Math.sin(face) * R * .05, g = c.createRadialGradient(mx, my, R * .05, mx, my, R * .42);
+  g.addColorStop(0, "rgba(4,4,6,1)"); g.addColorStop(.6, "rgba(16,14,14,.95)"); g.addColorStop(1, "rgba(30,26,24,0)");
+  c.fillStyle = g; c.beginPath(); c.ellipse(mx, my, R * .42, R * .3, face + Math.PI / 2, 0, 7); c.fill();
+  /* the jaws either side of the mouth */
+  for (const side of [-1, 1]) for (let k = 0; k < 3; k++) { const a = face + side * (1.1 + k * .45), d = R * (.38 + k * .06); realRock(c, x + Math.cos(a) * d, y + Math.sin(a) * d, R * (.16 + r_() * .08), r_(), snowy); }
 }
 function realLog(c, x, y, L, W, ang, seed) {
   const dx = Math.cos(ang) * L / 2, dy = Math.sin(ang) * L / 2, nx = -Math.sin(ang), ny = Math.cos(ang);
