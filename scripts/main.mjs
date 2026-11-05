@@ -414,7 +414,7 @@ function setPicking(on) {
 /* ---------- placing an encounter map by clicking a spot on a sheet or the World Map ---------- */
 let encHandler = null;
 const TUNE_LABELS = [["trees", "Tree cover", "clearing", "dense"], ["brush", "Undergrowth", "open", "thick"], ["rocks", "Rocks", "none", "boulder field"],
-  ["water", "Water", "narrower", "wider"], ["relief", "Elevation", "flat", "hilly"], ["decay", "Decay", "healthy", "blighted"]];
+  ["water", "Water", "narrower", "wider"], ["relief", "Elevation", "flat", "hilly"], ["decay", "Growth", "blighted", "lush"]];
 /** The world point (miles) under a click on a sheet or the World Map, or null on any other scene. */
 function worldPointAt(scene, p) {
   if (scene?.getFlag(ID, "state")?.frame) return toMiles(scene, p.x, p.y);
@@ -494,7 +494,7 @@ function setEncPlacing(on) {
     const opts = await askEncounter(scene, w, g); if (!opts) return;
     busy = true; const note = ui.notifications.info("Drawing the encounter map… about 15 seconds.", { permanent: true });
     try {
-      const tune = Object.fromEntries(TUNE_LABELS.map(([k]) => [k, (Number(opts[`tune_${k}`]) || 0) / 100]));
+      const tune = Object.fromEntries(TUNE_LABELS.map(([k]) => [k, (k === "decay" ? -1 : 1) * (Number(opts[`tune_${k}`]) || 0) / 100]));   /* Growth runs lush to the right: stored as decay, flipped */
       const r = await createEncounter({ x: w.x, y: w.y, from: scene.id, name: opts.name, cols: opts.cols, rows: opts.rows, party: !!opts.party, view: true, tune, notes: opts.notes });
       ui.notifications.info(`Made ${r.name}: ${r.cols}×${r.rows} squares${r.members ? `, party placed` : ""}${r.features.length ? `, with ${r.features.join(", ")}` : ""}. It's in the Encounter Maps folder.`);
       if (r.unknown.length) ui.notifications.warn(`Not built yet (kept on the scene for Claude): ${r.unknown.join("; ")}`, { permanent: true });

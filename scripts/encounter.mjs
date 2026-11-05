@@ -165,12 +165,12 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
   lattice(18, 501, (wx, wy, u, v, r3, r4, gx, gy) => {
     const t = terrainAt(wx, wy);
     const p0 = t === T.old ? .72 : t === T.woods ? .78 : t === T.damp ? .5 : t === T.rough ? .035 : t === T.hills ? .05 : t === T.fields ? .006 : 0;
-    const p = t === T.snow || t === T.crag ? p0 : nudge(p0, tune.trees, t === T.fields || t === T.rough || t === T.hills ? .25 : 0);
+    const lush = Math.max(0, -(tune.decay ?? 0)), p = t === T.snow || t === T.crag ? p0 : nudge(p0, tune.trees, t === T.fields || t === T.rough || t === T.hills ? .25 : 0) * (1 + lush * (forest(t) ? .12 : .8));
     if (r3 >= p) return;
     let sp = story.speciesAt(wx, wy, t);
     for (let k = 1; !sp && forest(t) && k < 6; k++) sp = story.speciesAt(wx + k * .004, wy - k * .003, t);
     if (!sp) sp = { kind: t === T.damp ? "willow" : "oakS", col: (t === T.damp ? PAL.willow : PAL.oak)[(r4 * 3) | 0] };
-    const [rMin, rMax, tr] = SPECIES[sp.kind] ?? SPECIES.oak, R = (rMin + (rMax - rMin) * r4) * (forest(t) ? 1.02 : .8);
+    const [rMin, rMax, tr] = SPECIES[sp.kind] ?? SPECIES.oak, R = (rMin + (rMax - rMin) * r4) * (forest(t) ? 1.02 : .8) * (1 + lush * .22);   /* lush: fuller crowns */
     if (!clearOf(u, v, Math.max(2, tr * 2)) || inF(OPEN_FEATS, u, v, 1.1 + R / 22)) return;   /* crowns stay out of open features */
     const dz0 = tune.decay ?? 0, snag = forest(t) ? (t === T.old ? .035 : .015) : 0;   /* the land as it is keeps a few natural snags; healthy clears them */
     const dead = hash(gx, gy, s + 517) < (dz0 >= 0 ? snag + dz0 * .7 : snag * (1 + dz0)) || inF(["dead"], u, v) && hash(gx, gy, s + 523) < .85;   /* decay kills trees outright */
@@ -183,7 +183,7 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
   lattice(6, 611, (wx, wy, u, v, r3) => {
     const t = terrainAt(wx, wy), fx = wx * FT_PER_MI, fy = wy * FT_PER_MI, n = fbm(fx / 34, fy / 34, 3, s + 613);
     const th0 = t === T.damp ? .5 : t === T.woods ? .58 : t === T.old ? .64 : t === T.rough ? .66 : t === T.hills ? .7 : t === T.fields ? .78 : 1;
-    const th = th0 >= 1 ? 1 : th0 - tune.brush * .2;
+    const th = th0 >= 1 ? 1 : th0 - tune.brush * .2 - Math.max(0, -(tune.decay ?? 0)) * .14;   /* lush: more undergrowth */
     if (n < th || r3 > .8 || !clearOf(u, v, 2) || inF(OPEN_FEATS, u, v, .95)) return;
     const Tb = season.T + .05 + (r3 - .4) * .12;   /* shrubs leaf out a little before the trees */
     feats.brush.push({ u, v, r: 2.2 + r3 * 2.4, t, leaf: leafAt(Tb, season.rising), aut: autAt(Tb, season.rising), hue: (r3 * 10 % 4) | 0 });
@@ -223,7 +223,8 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
   lattice(3, 901, (wx, wy, u, v, r3, r4) => {
     if (u < -4 || v < -4 || u > Wft + 4 || v > Hft + 4) return;
     const t = terrainAt(wx, wy), wa = waterAt(u, v); if (wa > -.15 || roadAt(u, v) < 6 || inF(["camp", "ruins", "cave"], u, v, .8)) return;
-    const kind = forest(t) ? (r3 < (t === T.old ? .16 : .1) ? "fern" : r3 < .38 ? "leaf" : null) : (t === T.fields || t === T.rough || t === T.hills || t === T.damp) ? (r3 < .34 ? "tuft" : r3 < (t === T.fields ? .37 : .355) ? "flower" : null) : null;
+    const lu = Math.max(0, -(tune.decay ?? 0));   /* lush: ferns carpet the woods, more flowers in the open */
+    const kind = forest(t) ? (r3 < (t === T.old ? .16 : .1) + lu * .2 ? "fern" : r3 < .38 + lu * .1 ? "leaf" : null) : (t === T.fields || t === T.rough || t === T.hills || t === T.damp) ? (r3 < .34 ? "tuft" : r3 < (t === T.fields ? .37 : .355) + lu * .06 ? "flower" : r4 < lu * .08 ? "fern" : null) : null;
     if (kind) feats.tufts.push({ u, v, kind, r: r4, t });
   });
   return { cols, rows, Wft, Hft, x0, y1, cx, cy, tune, season, placed: FT, inF, land, terrainAt, elevAt, waterAt, roadAt, W, L, lines, feats };
@@ -479,7 +480,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
         if (sea.snow > 0 && t !== T.snow) { const cov = snowAt(gx, gy, t);
           if (cov > 0) { const sn = snowTex(gx, gy, mixc([222, 228, 238], [206, 214, 228], .5)); col = mixc(col, sn.col, cov); dAdd += sn.d * cov; } }
         /* decay: grass and moss go grey-brown in patches */
-        if (decayS < 0 && t !== T.snow && t !== T.crag && !(sea.snow > .5)) col = mixc(col, mixc([92, 142, 52], [70, 120, 44], n2), -decayS * .22);   /* healthy: lusher, greener growth */
+        if (decayS < 0 && t !== T.snow && t !== T.crag && !(sea.snow > .5)) col = mixc(col, mixc([84, 140, 46], [52, 104, 38], n2), -decayS * (.3 + .3 * sm(.3, .7, tbl(gx * .6 + 11, gy * .6 + 4))));   /* lush: deep green growth and moss, in patches */
         if (decay > 0 && t !== T.snow && t !== T.crag) col = mixc(col, mixc([134, 122, 88], [100, 92, 72], n2), decay * (.4 + .5 * sm(.3, .7, tbl(gx * .6 + 3, gy * .6 + 8))));
         const sl = bil(SL, u, v);
         /* wind-packed snow: low ripples across the wind (from the north-west), blue-grey in the hollows, drifts, a little sparkle */
