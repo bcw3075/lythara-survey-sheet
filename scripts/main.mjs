@@ -275,6 +275,17 @@ async function partyFollowMarker(marker, pos) {
     }
   }
 }
+/* which way the party last travelled (world miles, unit vector), so Fight Here can bring them in on the edge they came from.
+   The client that moves a token stamps where it started; the active GM keeps the heading. */
+const partyTokWorld = (tok, pos = tok) => { const sc = tok.parent; if (sc?.getFlag(ID, "state")?.frame) { const c = tokenCentre(tok, pos); return toMiles(sc, c.x, c.y); } if (isWorldMap(sc)) return mapGeometry().toWorld(tokenCentre(tok, pos)); return null; };
+const isPartyTok = tok => { const party = partyActor(); return !!party && (tok.actorId === party.id || memberIds(party).has(tok.actorId)); };
+Hooks.on("preUpdateToken", (tok, change, opts) => { if (("x" in change || "y" in change) && isPartyTok(tok)) opts.lssFrom = { x: tok.x, y: tok.y }; });
+Hooks.on("updateToken", (tok, change, opts) => {
+  if (!isActiveGM() || !opts?.lssFrom || opts?.[ID]?.[SYNC] || !isPartyTok(tok)) return;
+  const a = partyTokWorld(tok, opts.lssFrom), b = partyTokWorld(tok); if (!a || !b) return;
+  const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy); if (d < .02) return;
+  game.settings.set(ID, "heading", { x: +(dx / d).toFixed(3), y: +(dy / d).toFixed(3) }).catch(() => {});
+});
 Hooks.on("updateToken", (tok, change, opts) => {
   if (!isActiveGM() || opts?.[ID]?.[SYNC] || !("x" in change || "y" in change)) return;
   const pos = { id: tok.id, x: change.x ?? tok.x, y: change.y ?? tok.y };
@@ -506,18 +517,21 @@ function encStyle() { if (document.getElementById("lss-enc-style")) return; cons
   st.textContent = `.lss-enc .window-content{overflow-y:auto!important}.lss-enc .lss-tune{display:grid!important;grid-template-columns:1fr 1fr;gap:4px 14px}.lss-enc .lss-tune legend{grid-column:1/-1}.lss-enc .lss-slider{display:grid;grid-template-columns:6.5em 1fr;align-items:center;gap:6px}.lss-enc .lss-slider input[type=range]{width:100%;margin:0}.lss-enc .lss-slider .hint{font-size:10px;margin:0}.lss-enc textarea{width:100%}`; document.head.appendChild(st); }
 async function askEncounter(scene, w, g = {}) {
   encStyle();
-  const D = foundry.applications.api.DialogV2, def = `Encounter: ${scene.name} (${w.x.toFixed(2)}, ${w.y.toFixed(2)})`;
-  return D.input({ window: { title: "Encounter map here", resizable: true }, classes: ["lss-enc"], position: { width: 640, height: Math.min(window.innerHeight - 40, 760), top: 20 }, ok: { label: "Make the map" },
-    content: `<p>An encounter map centred on the spot you clicked, ${Math.abs(w.x).toFixed(2)} mi ${w.x < 0 ? "west" : "east"} and ${Math.abs(w.y).toFixed(2)} mi ${w.y < 0 ? "south" : "north"} of the world origin.</p>${g.ground ? `<p>Around your click the sheet shows <b>${esc(g.wanted)}</b>. Best match nearby: <b>${esc(g.ground)}</b>${g.water ? `. The ${g.water} you clicked runs through it` : ""}${g.moved > .005 ? `, ${Math.round(g.moved * FT_PER_MI)} ft from your click` : ""}${g.cols && g.cols !== 40 ? `, on a ${g.cols}×${g.rows} map so it all fits` : ""}.</p>` : ""}
+  const D = foundry.applications.api.DialogV2, def = `Encounter: ${scene.name} (${w.x.toFixed(2)}, ${w.y.toFixed(2)})`, place = g.place ?? "none";
+  const near = g.nearby ?? [], opt = (v, l, sel) => `<option value="${v}"${sel ? " selected" : ""}>${esc(l)}</option>`;
+  return D.input({ window: { title: g.fight ? "Fight here" : "Encounter map here", resizable: true }, classes: ["lss-enc"], position: { width: 640, height: Math.min(window.innerHeight - 40, 760), top: 20 }, ok: { label: g.fight ? "Fight here" : "Make the map" },
+    content: `${near.length ? `<div class="form-group"><label>Map</label><select name="reuse">${opt("", "Build a new map", false)}${near.map((n, i) => opt(n.id, `Use “${n.name}” (${n.ft} ft away)`, i === 0)).join("")}</select></div>
+      <p class="hint">An encounter map already covers this spot. Using it keeps its tokens, notes and drawings; the settings below only apply to a new map.</p>` : ""}
+      <p>An encounter map centred on ${g.fight ? "the party" : "the spot you clicked"}, ${Math.abs(w.x).toFixed(2)} mi ${w.x < 0 ? "west" : "east"} and ${Math.abs(w.y).toFixed(2)} mi ${w.y < 0 ? "south" : "north"} of the world origin.</p>${g.fight && g.wanted ? `<p>Where the party stands the sheet shows <b>${esc(g.wanted)}</b>.</p>` : ""}${!g.fight && g.ground ? `<p>Around your click the sheet shows <b>${esc(g.wanted)}</b>. Best match nearby: <b>${esc(g.ground)}</b>${g.water ? `. The ${g.water} you clicked runs through it` : ""}${g.moved > .005 ? `, ${Math.round(g.moved * FT_PER_MI)} ft from your click` : ""}${g.cols && g.cols !== 40 ? `, on a ${g.cols}×${g.rows} map so it all fits` : ""}.</p>` : ""}
       <div class="form-group"><label>Name</label><input type="text" name="name" value="${esc(def)}"></div>
       <div class="form-group"><label>Squares across</label><input type="number" name="cols" value="${g.cols ?? 40}" min="10" max="${ENC_MAX}" step="1"></div>
       <div class="form-group"><label>Squares down</label><input type="number" name="rows" value="${g.rows ?? 40}" min="10" max="${ENC_MAX}" step="1"></div>
-      <div class="form-group"><label>Put the party there</label><input type="checkbox" name="party"></div>
+      <div class="form-group"><label>The party</label><select name="place">${opt("none", "Don't place them", place === "none")}${opt("edge", "At the edge they came in by", place === "edge")}${opt("middle", "In the middle (ambush)", place === "middle")}</select></div>
       <div class="form-group stacked"><label>Add to the map</label><textarea name="notes" rows="2" placeholder="e.g. a pond in the north-east, a stand of dead trees, a cave entrance on the west side facing east"></textarea>
         <p class="hint">Known: lake, pond, stream, dead trees, clearing, boulders, rock outcrop, cave entrance, standing stones, ruins, campsite, fallen giant tree. Places: north, south-east, middle, edge… Anything else is kept on the scene for Claude.</p></div>
       <fieldset class="lss-tune"><legend>Tune the spot (middle = the land as it is)</legend>${TUNE_LABELS.map(([k, label, lo, hi]) =>
         `<div class="lss-slider"><label>${label}</label><div><input type="range" name="tune_${k}" min="-100" max="100" step="10" value="0"><span class="hint">${lo}</span><span class="hint" style="float:right">${hi}</span></div></div>`).join("")}</fieldset>
-      <p class="hint">Leave the party unticked to plan ahead. The map opens for you only; players don't see it until you activate it.</p>` }).catch(() => null);
+      <p class="hint">Leave the party out to plan ahead. The map opens for you only; players don't see it until you activate it.</p>` }).catch(() => null);
 }
 function setEncPlacing(on) {
   if (encHandler) { canvas.stage.off("pointerdown", encHandler); encHandler = null; }
@@ -527,18 +541,43 @@ function setEncPlacing(on) {
     const scene = canvas.scene; let w = worldPointAt(scene, ev.getLocalPosition(canvas.stage));
     if (!w) return ui.notifications.warn("Click on an overland sheet or the World Map.");
     const g = await groundAt(scene, w); w = g.at;
-    const opts = await askEncounter(scene, w, g); if (!opts) return;
-    busy = true; const note = ui.notifications.info("Drawing the encounter map… about 15 seconds.", { permanent: true });
-    try {
-      const tune = Object.fromEntries(TUNE_LABELS.map(([k]) => [k, (k === "decay" ? -1 : 1) * (Number(opts[`tune_${k}`]) || 0) / 100]));   /* Growth runs lush to the right: stored as decay, flipped */
-      const r = await createEncounter({ x: w.x, y: w.y, from: scene.id, name: opts.name, cols: opts.cols, rows: opts.rows, party: !!opts.party, view: true, tune, notes: opts.notes });
-      ui.notifications.info(`Made ${r.name}: ${r.cols}×${r.rows} squares${r.members ? `, party placed` : ""}${r.features.length ? `, with ${r.features.join(", ")}` : ""}. It's in the Encounter Maps folder.`);
-      if (r.unknown.length) ui.notifications.warn(`Not built yet (kept on the scene for Claude): ${r.unknown.join("; ")}`, { permanent: true });
-      ui.controls.activate({ control: CONTROL, tool: "select" });
-    } catch (e) { ui.notifications.error(e.message); console.error(e); }
-    finally { busy = false; ui.notifications.remove?.(note); }
+    await runEncounter(scene, w, { ...g, nearby: nearbyEncounters(w) });
   };
   canvas.stage.on("pointerdown", encHandler);
+}
+/* encounter maps already covering a spot (centre within 300 ft), nearest first */
+function nearbyEncounters(w, ft = 300) {
+  return game.scenes.filter(s => s.getFlag(ID, "encounter")).map(s => { const st = s.getFlag(ID, "encounter"); return { id: s.id, name: s.name, ft: Math.round(Math.hypot(st.cx - w.x, st.cy - w.y) * FT_PER_MI) }; })
+    .filter(n => n.ft <= ft).sort((a, b) => a.ft - b.ft).slice(0, 4);
+}
+/* the dialog, then build a new map or open one that's there already */
+async function runEncounter(scene, w, g) {
+  const opts = await askEncounter(scene, w, g); if (!opts) return;
+  const place = opts.place && opts.place !== "none" ? opts.place : null;
+  busy = true; let note = null;
+  try {
+    if (opts.reuse) {
+      const s = game.scenes.get(opts.reuse); if (!s) throw new Error("That encounter map is gone.");
+      const n = place ? await placeMembers(s, place) : 0; await s.view();
+      ui.notifications.info(`Opened ${s.name}${n ? `, ${n} party member${n > 1 ? "s" : ""} placed` : ""}.`);
+    } else {
+      note = ui.notifications.info("Drawing the encounter map… about 15 seconds.", { permanent: true });
+      const tune = Object.fromEntries(TUNE_LABELS.map(([k]) => [k, (k === "decay" ? -1 : 1) * (Number(opts[`tune_${k}`]) || 0) / 100]));   /* Growth runs lush to the right: stored as decay, flipped */
+      const r = await createEncounter({ x: w.x, y: w.y, from: scene.id, name: opts.name, cols: opts.cols, rows: opts.rows, party: false, placement: place, view: true, tune, notes: opts.notes });
+      ui.notifications.info(`Made ${r.name}: ${r.cols}×${r.rows} squares${r.members ? `, party placed` : ""}${r.features.length ? `, with ${r.features.join(", ")}` : ""}. It's in the Encounter Maps folder.`);
+      if (r.unknown.length) ui.notifications.warn(`Not built yet (kept on the scene for Claude): ${r.unknown.join("; ")}`, { permanent: true });
+    }
+    ui.controls.activate({ control: CONTROL, tool: "select" });
+  } catch (e) { ui.notifications.error(e.message); console.error(e); }
+  finally { busy = false; if (note) ui.notifications.remove?.(note); }
+}
+/* Fight Here: a map where the party is now, the party on the edge they came in by (changeable in the dialog) */
+async function fightHere() {
+  if (busy) return;
+  const at = partyWorldPoint(); if (!at) return ui.notifications.warn("Couldn't find the party: put the party token on a sheet or the World Map.");
+  const scene = game.scenes.get(at.from) ?? canvas.scene, w = { x: +at.x.toFixed(4), y: +at.y.toFixed(4) };
+  const g = await groundAt(scene, w).catch(() => ({}));
+  await runEncounter(scene, w, { ...g, at: w, moved: 0, water: null, fight: true, place: "edge", nearby: nearbyEncounters(w) });
 }
 
 /* ---------- GM window ---------- */
@@ -820,7 +859,7 @@ function partyWorldPoint() {
 }
 /** Make an encounter map at a world point (default: where the party is). The party's members are put in the middle when the
     map is made where the party is, or when party is true; a map planned ahead at a chosen spot leaves the party alone. */
-export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, activate = false, view = false, party, tune, notes } = {}) {
+export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, activate = false, view = false, party, placement, tune, notes } = {}) {
   if (!game.user.isGM) throw new Error("Only a GM can make an encounter map.");
   const chosen = x !== undefined && y !== undefined && Number.isFinite(+x) && Number.isFinite(+y);
   party ??= !chosen;
@@ -836,7 +875,7 @@ export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, 
     grid: { type: CONST.GRID_TYPES.SQUARE, size: ENC_PX, distance: SQ_FT, units: "ft", alpha: 0.18 }, tokenVision: true, fog: { mode: 2 },
     environment: { globalLight: { enabled: true, darkness: { min: 0, max: .5 } } }, flags: { pf2e: { syncDarkness: "disabled" }, [ID]: { encounter: { version: 1, cx: at.x, cy: at.y, cols, rows, from: at.from ?? null, tune: tune ?? null, features, notes: String(notes ?? "").slice(0, 2000), unknown: parsed.unknown, cover } } } });
   const drawn = await drawEncounterScene(scene);
-  const members = party ? await placeMembers(scene) : 0;
+  const mode = placement ?? (party ? "middle" : null), members = mode ? await placeMembers(scene, mode) : 0;
   if (activate) await scene.activate(); else if (view) await scene.view();
   return { ok: true, scene: scene.id, name: scene.name, at, cols, rows, members, features: features.map(f => f.kind), unknown: parsed.unknown, ...drawn };
 }
@@ -888,13 +927,18 @@ export async function returnFromEncounter(scene, { activate = true, removeTokens
   return { at: { x: +w.x.toFixed(3), y: +w.y.toFixed(3) }, to: (sheet ?? map).name, removed: removeTokens ? toks.length : 0 };
 }
 /* the party's members around the middle of the map, on open squares, in a loose ring */
-async function placeMembers(scene) {
+/* mode "middle" (ambush: the party in the centre) or "edge" (arriving: on the edge they came in by, from the last heading; south if unknown) */
+async function placeMembers(scene, mode = "middle") {
   const party = partyActor(); if (!party) return 0;
   const st = scene.getFlag(ID, "encounter"), d = scene.dimensions, actors = party.members.filter(a => !scene.tokens.some(t => t.actorId === a.id));
   const blocked = new Set(scene.regions.filter(r => r.getFlag(ID, "enc")).flatMap(r => r.shapes.flatMap(sh => { const out = []; for (let x = sh.x; x < sh.x + sh.width; x += ENC_PX) for (let y = sh.y; y < sh.y + sh.height; y += ENC_PX) out.push(`${x},${y}`); return out; })));
-  const ci = Math.floor(st.cols / 2), cj = Math.floor(st.rows / 2), spots = [];
+  let ci = Math.floor(st.cols / 2), cj = Math.floor(st.rows / 2); const spots = [];
+  if (mode === "edge") { const hd = game.settings.get(ID, "heading"); let ex = hd ? -hd.x : 0, ey = hd ? hd.y : 1;   /* scene y runs south; they came from behind their heading */
+    const n = Math.hypot(ex, ey) || 1; ex /= n; ey /= n; const k = Math.min(Math.abs(ex) > 1e-3 ? (st.cols / 2 - 3) / Math.abs(ex) : 1e9, Math.abs(ey) > 1e-3 ? (st.rows / 2 - 3) / Math.abs(ey) : 1e9);
+    ci = Math.round(ci + ex * k); cj = Math.round(cj + ey * k); }
   for (let ring = 0; spots.length < actors.length && ring < 12; ring++) for (let di = -ring; di <= ring; di++) for (let dj = -ring; dj <= ring; dj++) {
     if (Math.max(Math.abs(di), Math.abs(dj)) !== ring || spots.length >= actors.length) continue;
+    if (ci + di < 0 || cj + dj < 0 || ci + di >= st.cols || cj + dj >= st.rows) continue;
     const x = d.sceneX + (ci + di) * ENC_PX, y = d.sceneY + (cj + dj) * ENC_PX; if (!blocked.has(`${x},${y}`) && !spots.some(s => Math.abs(s.x - x) < ENC_PX * 2 && Math.abs(s.y - y) < ENC_PX * 2)) spots.push({ x, y });
   }
   const data = [];
@@ -908,6 +952,7 @@ Hooks.once("init", () => {
   game.settings.register(ID, "world", { scope: "world", config: false, type: Object, default: WORLD_DEFAULT });
   game.settings.register(ID, "sheetNav", { name: "Show sheets in the navigation bar", hint: "Off keeps the bar to the World Map and the active sheet; sheets stay in the Overland Sheets folder of the Scenes tab.", scope: "world", config: true, type: Boolean, default: false, onChange: () => organizeSheets().catch(() => {}) });
   game.settings.register(ID, "survey", { scope: "world", config: false, type: Object, default: null });
+  game.settings.register(ID, "heading", { scope: "world", config: false, type: Object, default: null });
   game.settings.register(ID, "explored", { scope: "world", config: false, type: Object, default: { version: 1, chunks: {}, harvested: {} } });
 });
 async function askExtend() {
@@ -936,6 +981,7 @@ Hooks.on("getSceneControlButtons", controls => {
     tools: {
       select: { name: "select", title: "Select and move pins", icon: "fa-solid fa-expand", order: 1 },
       pickHexes: { name: "pickHexes", title: "Pick Hexes for a Sheet (click hexes on the World Map)", icon: "fa-solid fa-draw-polygon", order: 2, onChange: (ev, active) => setPicking(active) },
+      fightHere: { name: "fightHere", title: "Fight Here (an encounter map where the party is now)", icon: "fa-solid fa-khanda", button: true, order: 2.5, onChange: () => fightHere().catch(e => ui.notifications.error(e.message)) },
       encounterHere: { name: "encounterHere", title: "Encounter Map Here (click a spot on a sheet or the World Map)", icon: "fa-solid fa-chess-board", order: 3, onChange: (ev, active) => setEncPlacing(active) },
       extendMap: { name: "extendMap", title: "Extend this encounter map at an edge", icon: "fa-solid fa-expand-arrows-alt", button: true, order: 4, onChange: () => askExtend().catch(e => ui.notifications.error(e.message)) },
       backOverland: { name: "backOverland", title: "Back to the overland (party returns to the sheet at this spot)", icon: "fa-solid fa-person-walking-arrow-right", button: true, order: 5, onChange: () => askReturn().catch(e => ui.notifications.error(e.message)) },
