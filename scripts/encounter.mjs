@@ -25,7 +25,14 @@ const SPECIES = {
 const PAL = { oak: ["#616531", "#717436", "#535a2d", "#6a6e33"], old: ["#3c4324", "#474e2d", "#303623"], beech: ["#94993f", "#838a41", "#a8ad48"], birch: ["#b0b54e", "#a8ad48", "#bdbf5a"], hemlock: ["#2f4232", "#36493a", "#2a3b2e"], pine: ["#465a2e", "#506433", "#3e5230"], willow: ["#8d9a58", "#7c8e55", "#9aa562"] };
 
 /** Read the land for an encounter map and lay out every feature. Pure data; drawing is separate. */
-export function planEncounter(data, { cx, cy, cols = 40, rows = 40 }) {
+/* Tuning sliders, each -1..1 with 0 meaning "the land as it is": trees (cover), brush (undergrowth), rocks, water (width),
+   relief (how hilly the ground is), decay (dead trees, grey grass, more deadfall). Same spot and same sliders, same map. */
+export const TUNE_KEYS = ["trees", "brush", "rocks", "water", "relief", "decay"];
+const tuneOf = t => Object.fromEntries(TUNE_KEYS.map(k => [k, Math.max(-1, Math.min(1, Number(t?.[k]) || 0))]));
+/* a chance p pushed up toward 1 or down toward 0 by a slider; open ground gains a little cover too when pushed up */
+const nudge = (p, k, open = 0) => k >= 0 ? Math.min(1, p + (1 - p) * k * .85 + open * k) : p * (1 + k);
+export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune }) {
+  tune = tuneOf(tune);
   const Wft = cols * SQ_FT, Hft = rows * SQ_FT, wmi = Wft / FT_PER_MI, hmi = Hft / FT_PER_MI;
   const x0 = cx - wmi / 2, y1 = cy + hmi / 2;
   /* land a mile around the map, so edges and lines have context */
@@ -47,8 +54,13 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40 }) {
     return T_[j * GW + i];
   }
   /* height in feet: the land model, plus small hummocks */
-  const elevAt = (wx, wy) => { const fi = wx * inv - land.i0 - .5, fj = land.j1 - wy * inv - .5, i = Math.floor(fi), j = Math.floor(fj); if (i < 0 || j < 0 || i >= GW - 1 || j >= GH - 1) return 0;
+  const relief = tune.relief >= 0 ? 1 + tune.relief * 4 : 1 + tune.relief * .9;   /* x5 at the top, flattened to a tenth at the bottom */
+  const baseElev = (wx, wy) => { const fi = wx * inv - land.i0 - .5, fj = land.j1 - wy * inv - .5, i = Math.floor(fi), j = Math.floor(fj); if (i < 0 || j < 0 || i >= GW - 1 || j >= GH - 1) return 0;
     const u = fi - i, v = fj - j, k = j * GW + i; return (E[k] * (1 - u) + E[k + 1] * u) * (1 - v) + (E[k + GW] * (1 - u) + E[k + GW + 1] * u) * v; };
+  const e0 = baseElev(cx, cy);
+  const elevAt = (wx, wy) => { const fx = wx * FT_PER_MI, fy = wy * FT_PER_MI;
+    const hum = (fbm(fx / 140, fy / 140, 3, s + 351) - .5) * 30 + (fbm(fx / 45, fy / 45, 2, s + 353) - .5) * 8;   /* rises and hollows (feet), only when relief is turned up */
+    return e0 + (baseElev(wx, wy) - e0) * relief + hum * Math.max(0, tune.relief) * 1.6; };
   /* lines that pass near the map, bent a little more at close range */
   const pad = 60, lines = [];
   for (const l of land.lines) {
@@ -58,7 +70,7 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40 }) {
     lines.push({ id: l.id, kind: l.kind, pts: fine.filter((p, i, a) => { const q = a[Math.max(0, i - 1)], r = a[Math.min(a.length - 1, i + 1)]; return [p, q, r].some(z => z.u > -400 && z.u < Wft + 400 && z.v > -400 && z.v < Hft + 400); }) });
   }
   const water = lines.filter(l => l.kind === "creek" || l.kind === "river"), roads = lines.filter(l => l.kind === "road" || l.kind === "track");
-  const halfWidth = (l, u, v) => { const n = fbm((x0 * FT_PER_MI + u) / 55, (y1 * FT_PER_MI - v) / 55, 3, s + 333); return l.kind === "river" ? 14 + 10 * n : 2.5 + 6 * n * n; };
+  const wMul = 2 ** tune.water, halfWidth = (l, u, v) => { const n = fbm((x0 * FT_PER_MI + u) / 55, (y1 * FT_PER_MI - v) / 55, 3, s + 333); return (l.kind === "river" ? 14 + 10 * n : 2.5 + 6 * n * n) * wMul; };
   /* close-range wander: the line is read through a slow warp, so creeks and tracks bend every few dozen feet */
   const wob = (u, v, amp, sc, k) => { const gx = x0 * FT_PER_MI + u, gy = y1 * FT_PER_MI - v; return [u + (fbm(gx / sc, gy / sc, 3, s + k) - .5) * 2 * amp, v + (fbm(gx / sc, gy / sc, 3, s + k + 5) - .5) * 2 * amp]; };
   const lineDist = (l, u, v) => { let best = 1e9; for (let i = 1; i < l.pts.length; i++) best = Math.min(best, segDist(u, v, l.pts[i - 1], l.pts[i])); return best; };
@@ -78,34 +90,37 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40 }) {
   };
   const forest = t => t === T.woods || t === T.old, clearOf = (u, v, ft) => waterAt(u, v) < -ft / 6 && roadAt(u, v) > 6 + ft;
   /* trees: one chance per 18-ft square of the world */
-  lattice(18, 501, (wx, wy, u, v, r3, r4) => {
+  lattice(18, 501, (wx, wy, u, v, r3, r4, gx, gy) => {
     const t = terrainAt(wx, wy);
-    const p = t === T.old ? .72 : t === T.woods ? .78 : t === T.damp ? .5 : t === T.rough ? .035 : t === T.hills ? .05 : t === T.fields ? .006 : 0;
+    const p0 = t === T.old ? .72 : t === T.woods ? .78 : t === T.damp ? .5 : t === T.rough ? .035 : t === T.hills ? .05 : t === T.fields ? .006 : 0;
+    const p = t === T.snow || t === T.crag ? p0 : nudge(p0, tune.trees, t === T.fields || t === T.rough || t === T.hills ? .25 : 0);
     if (r3 >= p) return;
     let sp = story.speciesAt(wx, wy, t);
     for (let k = 1; !sp && forest(t) && k < 6; k++) sp = story.speciesAt(wx + k * .004, wy - k * .003, t);
     if (!sp) sp = { kind: t === T.damp ? "willow" : "oakS", col: (t === T.damp ? PAL.willow : PAL.oak)[(r4 * 3) | 0] };
     const [rMin, rMax, tr] = SPECIES[sp.kind] ?? SPECIES.oak, R = (rMin + (rMax - rMin) * r4) * (forest(t) ? 1.02 : .8);
     if (!clearOf(u, v, Math.max(2, tr * 2))) return;
-    feats.trees.push({ u, v, R, trunk: tr * (.8 + r4 * .5), kind: sp.kind, col: sp.col, seed: r3 * 997 + r4 });
+    const dead = hash(gx, gy, s + 517) < tune.decay * .7;   /* decay kills trees outright */
+    feats.trees.push({ u, v, R, trunk: tr * (.8 + r4 * .5), kind: sp.kind, col: sp.col, seed: r3 * 997 + r4, dead });
   });
   /* undergrowth: patches where a slow noise runs high; denser on damp ground and at forest edges */
   lattice(6, 611, (wx, wy, u, v, r3) => {
     const t = terrainAt(wx, wy), fx = wx * FT_PER_MI, fy = wy * FT_PER_MI, n = fbm(fx / 34, fy / 34, 3, s + 613);
-    const th = t === T.damp ? .5 : t === T.woods ? .58 : t === T.old ? .64 : t === T.rough ? .66 : t === T.hills ? .7 : 1;
+    const th0 = t === T.damp ? .5 : t === T.woods ? .58 : t === T.old ? .64 : t === T.rough ? .66 : t === T.hills ? .7 : t === T.fields ? .78 : 1;
+    const th = th0 >= 1 ? 1 : th0 - tune.brush * .2;
     if (n < th || r3 > .8 || !clearOf(u, v, 2)) return;
     feats.brush.push({ u, v, r: 2.2 + r3 * 2.4, t });
   });
   /* deadfall in the woods */
   lattice(55, 701, (wx, wy, u, v, r3, r4) => {
-    const t = terrainAt(wx, wy); if (!(forest(t) && r3 < (t === T.old ? .3 : .16)) || !clearOf(u, v, 8)) return;
+    const t = terrainAt(wx, wy); if (!(forest(t) && r3 < (t === T.old ? .3 : .16) * (1 + Math.max(0, tune.decay) * 2)) || !clearOf(u, v, 8)) return;
     feats.logs.push({ u, v, len: 12 + r4 * 16, ang: r3 * 37 % Math.PI, w: 1.4 + r4 * 1.4 });
   });
   /* stones and boulders on rough and hill ground, and a few on the creek bed */
   lattice(26, 801, (wx, wy, u, v, r3, r4) => {
     const t = terrainAt(wx, wy), wa = waterAt(u, v);
     const p = t === T.hills ? .2 : t === T.rough ? .08 : t === T.crag ? .5 : t === T.snow ? .14 : t === T.bad ? .3 : forest(t) ? .04 : wa > -.6 && wa < .2 ? .25 : 0;
-    if (r3 >= p || roadAt(u, v) < 8) return;
+    if (r3 >= nudge(p, tune.rocks, t === T.fields || forest(t) ? .03 : .12) || roadAt(u, v) < 8) return;
     feats.rocks.push({ u, v, r: (t === T.crag || t === T.hills || t === T.snow ? 2 : 1) + r4 * (t === T.snow ? 4 : 3), seed: r4, t });
   });
   /* ground detail: grass tufts, flowers, leaf litter, ferns, on a 3-ft lattice */
@@ -116,7 +131,7 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40 }) {
     const kind = forest(t) ? (r3 < (t === T.old ? .16 : .1) ? "fern" : r3 < .38 ? "leaf" : null) : (t === T.fields || t === T.rough || t === T.hills || t === T.damp) ? (r3 < .34 ? "tuft" : r3 < (t === T.fields ? .37 : .355) ? "flower" : null) : null;
     if (kind) feats.tufts.push({ u, v, kind, r: r4, t });
   });
-  return { cols, rows, Wft, Hft, x0, y1, cx, cy, land, terrainAt, elevAt, waterAt, roadAt, W, L, lines, feats };
+  return { cols, rows, Wft, Hft, x0, y1, cx, cy, tune, land, terrainAt, elevAt, waterAt, roadAt, W, L, lines, feats };
 }
 
 function segDist(px, py, a, b) { const dx = b.u - a.u, dy = b.v - a.v, l2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((px - a.u) * dx + (py - a.v) * dy) / l2)); return Math.hypot(px - a.u - t * dx, py - a.v - t * dy); }
@@ -319,7 +334,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
     let t = q0, best = s(q0), z; if ((z = s(q1)) > best) { best = z; t = q1; } if ((z = s(q2)) > best) { best = z; t = q2; } if ((z = s(q3)) > best) t = q3; return t; };
   /* slope shading per foot, sampled per pixel */
   const SL = new Float32Array(fw * fh); for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) SL[j * fw + i] = (bil(EF, i - 1.5, j) - bil(EF, i + 1.5, j) + bil(EF, i, j - 1.5) - bil(EF, i, j + 1.5)) * .8;
-  const ox = plan.x0 * FT_PER_MI, oy = plan.y1 * FT_PER_MI;
+  const ox = plan.x0 * FT_PER_MI, oy = plan.y1 * FT_PER_MI, decay = Math.max(0, plan.tune?.decay ?? 0);
   /* overall flow direction of the water, for streaks */
   let fa = 0; { const wl = plan.lines.find(l => l.kind === "creek" || l.kind === "river"); if (wl && wl.pts.length > 1) { const a = wl.pts[0], b = wl.pts[wl.pts.length - 1]; fa = Math.atan2(b.v - a.v, b.u - a.u); } }
   const ca = Math.cos(fa), sa = Math.sin(fa);
@@ -336,6 +351,8 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
           col = mixc(col, [86, 116, 46], sm(.5, .72, tbl(gx / 2.2 + 31, gy / 2.2 + 13)) * .3); }
         /* moss on the forest floor */
         if (t === T.woods || t === T.old) col = mixc(col, [58, 78, 34], sm(.55, .7, tbl(gx / 7 + 5, gy / 7 + 2)) * .7);
+        /* decay: grass and moss go grey-brown in patches */
+        if (decay > 0 && t !== T.snow && t !== T.crag) col = mixc(col, mixc([134, 122, 88], [100, 92, 72], n2), decay * (.4 + .5 * sm(.3, .7, tbl(gx * .6 + 3, gy * .6 + 8))));
         const sl = bil(SL, u, v);
         let relief = 6, dAdd = 0;
         /* wind-packed snow: low ripples across the wind (from the north-west), blue-grey in the hollows, drifts, a little sparkle */
@@ -425,7 +442,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
     /* tree shadows: crisp, long, in the crown's outline, falling south-east (sun high in the north-west) */
     c.save(); c.globalCompositeOperation = "multiply"; c.fillStyle = "rgb(138,144,156)";
     /* each shadow is blurred on a small scratch canvas, then multiplied in: a blur filter on the full map canvas costs a whole-canvas pass per tree */
-    for (const t of plan.feats.trees) { const R = t.R * ppf * .97, x = t.u * ppf + R * .36, y = t.v * ppf + R * .42, bl = Math.max(1, R * .1);
+    for (const t of plan.feats.trees) { if (t.dead) continue; const R = t.R * ppf * .97, x = t.u * ppf + R * .36, y = t.v * ppf + R * .42, bl = Math.max(1, R * .1);
       /* blurred at reduced resolution (the edge is soft anyway), then scaled up */
       const q = Math.max(1, Math.min(4, bl / 1.5)), pad = Math.ceil(R * 1.2 + bl * 3 + 4), S = pad * 2, s2 = Math.ceil(S / q), sc = scratch(s2), ox = Math.floor(x) - pad, oy = Math.floor(y) - pad, k = sc.c;
       k.setTransform(1, 0, 0, 1, 0, 0); k.clearRect(0, 0, s2 + 1, s2 + 1); k.filter = `blur(${bl / q}px)`; k.fillStyle = "rgb(138,144,156)"; k.beginPath();
@@ -445,6 +462,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
     const trees = plan.feats.trees.slice().sort((a, b) => a.R - b.R);
     for (const t of trees) {
       const x = t.u * ppf, y = t.v * ppf, R = t.R * ppf, col = hex(t.col);
+      if (t.dead) { realDeadTree(c, x, y, R, t.seed, ppf); continue; }
       if (t.kind === "pine" || t.kind === "hemlock") realConifer(c, x, y, R, col, t.seed, ppf);
       else { realCanopy(c, x, y, R, col, t.seed, ppf, 1, t.kind); }
     }
@@ -498,6 +516,19 @@ function realCanopy(c, x, y, R, col, seed, ppf, scale, kind) {
     const ord = k => k % 1000 === 2 ? 99 : Math.floor(k / 1000) * 10 + hash(k % 1000, 5, 77);
     c.globalAlpha = .8; for (const k of [...B.keys()].sort((a, b) => ord(a) - ord(b))) { c.fillStyle = tone((k % 1000) / 40); c.fill(B.get(k)); } c.globalAlpha = 1;
   }
+}
+/* a dead tree from above: bare grey limbs radiating from the trunk, forking as they go, with their shadow cast south-east */
+function realDeadTree(c, x, y, R, seed, ppf) {
+  const r_ = rng(Math.round(seed * 9973) + 53), limbs = [];
+  const grow = (x0, y0, a, len, w, depth) => { const x1 = x0 + Math.cos(a) * len, y1 = y0 + Math.sin(a) * len; limbs.push([x0, y0, x1, y1, w]);
+    if (depth < 3) { const n = 1 + (r_() < .7 ? 1 : 0); for (let i = 0; i < n + 1; i++) grow(x1, y1, a + (r_() - .5) * 1.3, len * (.55 + r_() * .2), w * .62, depth + 1); } };
+  const n = 5 + Math.floor(r_() * 4); for (let i = 0; i < n; i++) grow(x, y, i / n * 6.283 + r_() * .6, R * (.32 + r_() * .14), Math.max(1.2, ppf * .55), 0);
+  c.lineCap = "round";
+  const draw = (dx, dy, col) => { for (const [a, b, e, f, w] of limbs) { c.strokeStyle = col; c.lineWidth = w; c.beginPath(); c.moveTo(a + dx, b + dy); c.lineTo(e + dx, f + dy); c.stroke(); } };
+  c.save(); c.globalCompositeOperation = "multiply"; draw(R * .22, R * .26, "rgba(120,124,136,.55)"); c.restore();
+  draw(1, 1, "#3e3833"); draw(0, 0, "#8a8178");
+  c.lineWidth = Math.max(1, ppf * .2); c.strokeStyle = "rgba(200,192,180,.5)"; for (const [a, b, e, f, w] of limbs) if (w > ppf * .3) { c.beginPath(); c.moveTo(a - 1, b - 1); c.lineTo(e - 1, f - 1); c.stroke(); }
+  const tr = Math.max(2, ppf * .9); c.fillStyle = "#5e554c"; c.beginPath(); c.arc(x, y, tr, 0, 7); c.fill(); c.fillStyle = "#9a9086"; c.beginPath(); c.arc(x - tr * .25, y - tr * .25, tr * .55, 0, 7); c.fill();
 }
 function realConifer(c, x, y, R, col, seed, ppf) {
   const key = Math.round(seed * 97) | 0, r_ = rng(Math.round(seed * 9973) + 29), tilt = r_() * 6.283; col = liftDark(col);
