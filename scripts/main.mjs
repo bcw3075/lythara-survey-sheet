@@ -1,7 +1,7 @@
 import { PPM, renderMap } from "./render.mjs";
 import { CELL, lineCourse, T as TERRAIN } from "./land.mjs";
 import { classifyImage, surveyToPng, surveyFromPng, surveySlice, SURVEY_FILE, SURVEY_VERSION } from "./survey.mjs";
-import { harvestScene, restoreScene, syncExploration, exploredArea } from "./explore.mjs";
+import { harvestScene, restoreScene, growExplored, syncExploration, exploredArea } from "./explore.mjs";
 import { planEncounter, drawEncounter, parseNotes, FT_PER_MI, SQ_FT } from "./encounter.mjs";
 
 const ID = "lythara-survey-sheet";
@@ -842,7 +842,10 @@ async function drawEncounterScene(scene, { grow = null } = {}) {
   await syncEncounterDarkness([scene]);
   /* last of all: the new picture and size in one update, so each client redraws once with everything already in place */
   const level = scene.levels.contents[0], background = { ...level.toObject().background, src: `${g.path}?v=${rev}` };
-  if (grow) await scene.update({ width: d.sceneWidth, height: d.sceneHeight, levels: [{ ...level.toObject(), background }] });
+  if (grow) {
+    await growExplored(scene, grow.fog).catch(e => { console.warn(`${ID} | explored areas not moved`, e); ui.notifications.warn("The map grew, but explored areas couldn't be moved with it."); });
+    await scene.update({ width: d.sceneWidth, height: d.sceneHeight, levels: [{ ...level.toObject(), background }] });
+  }
   else await level.update({ background });
   const sea = plan.season;
   return { date: cal.label, season: { warmth: +sea.T.toFixed(2), leaf: +sea.leaf.toFixed(2), autumn: +sea.autumn.toFixed(2), snow: +sea.snow.toFixed(2) }, darkness: scene.environment?.darknessLevel, trees: plan.feats.trees.length, brush: plan.feats.brush.length, walls: walls.length, difficult: costs.filter(v => v === 1).length, deep: costs.filter(v => v === 2).length, bytes: g.bytes + c.bytes };
@@ -910,7 +913,8 @@ export async function extendEncounter(scene, side, squares = 10) {
     const movement = type === "Token" ? { movement: Object.fromEntries(docs.map(x => [x.id, { constrainOptions: { ignoreWalls: true, ignoreCost: true } }])) } : {};
     await scene.updateEmbeddedDocuments(type, ups, { animate: false, ...movement, [ID]: { [SYNC]: true } });
   } };
-  const r = await drawEncounterScene(scene, { grow: { state: { cx: +cx.toFixed(5), cy: +cy.toFixed(5), cols, rows }, dims, shift } });
+  const r = await drawEncounterScene(scene, { grow: { state: { cx: +cx.toFixed(5), cy: +cy.toFixed(5), cols, rows }, dims, shift,
+    fog: { from: { width: before.sceneWidth, height: before.sceneHeight }, to: { width, height }, at: { x: side === "west" ? n * ENC_PX : 0, y: side === "north" ? n * ENC_PX : 0 } } } } });
   return { side, squares: n, cols, rows, shifted: [dx, dy], ...r };
 }
 /** End an encounter: the party goes back to the overland at the spot where the fight was (the sheet covering it, through the
@@ -990,6 +994,10 @@ Hooks.on("canvasReady", () => {
     region.destroy({ children: true }); doc._object = live; doc._destroyed = gone;
   }
 });
+/* An encounter map is growing and its explored images have just been moved. Each client saves pending exploration as its canvas
+   tears down, and that would write its old-sized image over the moved one, so drop it: at most the last two seconds of walking,
+   and the redraw marks where the tokens stand again. This hook runs before the teardown starts. */
+Hooks.on("updateScene", (scene, changed) => { if (("width" in changed || "height" in changed) && scene.getFlag(ID, "encounter") && canvas.scene?.id === scene.id) canvas.fog._updated = false; });
 /* the module's own group in the left-hand bar (GM only). It works on the notes layer, so pins stay visible and draggable
    with its Select tool. */
 const CONTROL = "lythara";

@@ -106,6 +106,27 @@ export async function restoreScene(scene) {
   return cells;
 }
 
+/** A scene is about to grow: move every account's explored image onto the new scene rectangle. Foundry stretches the saved image
+    over the whole scene rectangle, so without this the old exploration would land in the wrong place at the wrong size.
+    from/to are the rectangle's width and height, at is where the old rectangle's top-left sits inside the new one (scene pixels).
+    Call it just before the resize; loadFog false stops clients reloading an image that doesn't fit their canvas yet. */
+export async function growExplored(scene, { from, to, at }) {
+  const docs = await F().database.get(F(), { query: { scene: scene.id } }), coll = game.collections.get("FogExploration");
+  let n = 0;
+  for (const doc of docs) {
+    const img = await imageOf(doc); if (!img) continue;
+    /* keep the record's sharpness, within what Foundry itself uses for big scenes */
+    const k = Math.min(img.width / from.width, 4096 / Math.max(to.width, to.height));
+    const cv = document.createElement("canvas"); cv.width = Math.round(to.width * k); cv.height = Math.round(to.height * k);
+    const c = cv.getContext("2d"); c.fillStyle = "#000"; c.fillRect(0, 0, cv.width, cv.height);
+    c.drawImage(img, at.x * k, at.y * k, from.width * k, from.height * k);
+    if (!coll.has(doc.id)) coll.set(doc.id, doc);   /* same reason as restoreScene */
+    await doc.update({ explored: cv.toDataURL("image/webp", 0.8), timestamp: Date.now() }, { loadFog: false });
+    n++;
+  }
+  return n;
+}
+
 /** All sheets and the World Map: read everything the players have seen, then write it back everywhere. */
 export async function syncExploration({ restore = true } = {}) {
   const scenes = game.scenes.filter(s => geometry(s)), out = { harvested: 0, restored: [] };
