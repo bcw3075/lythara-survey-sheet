@@ -413,7 +413,7 @@ function setPicking(on) {
 
 /* ---------- placing an encounter map by clicking a spot on a sheet or the World Map ---------- */
 let encHandler = null;
-const TUNE_LABELS = [["trees", "Tree cover", "clearing", "dense"], ["brush", "Undergrowth", "open", "thick"], ["rocks", "Rocks", "none", "boulder field"],
+const TUNE_LABELS = [["trees", "Tree cover", "clearing", "dense"], ["brush", "Rough going", "easy", "hard"], ["rocks", "Rocks", "none", "boulder field"],
   ["water", "Water", "narrower", "wider"], ["relief", "Elevation", "flat", "hilly"], ["decay", "Growth", "blighted", "lush"]];
 /** The world point (miles) under a click on a sheet or the World Map, or null on any other scene. */
 function worldPointAt(scene, p) {
@@ -675,11 +675,12 @@ function squareCosts(plan) {
   for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
     const near = B.filter(b => Math.abs(b.u - (i * SQ_FT + 2.5)) < b.r + 3 && Math.abs(b.v - (j * SQ_FT + 2.5)) < b.r + 3);
     let wet = 0, deep = 0, brush = 0;
+    const go = plan.goingAt ? [[1, 1], [3.5, 1], [1, 3.5], [3.5, 3.5], [2.5, 2.5]].reduce((a, [a1, b1]) => a + plan.goingAt(i * SQ_FT + a1, j * SQ_FT + b1).g, 0) / 5 : 0;   /* drifts, mud, scree */
     for (let a = 0; a < SQ_FT; a++) for (let b = 0; b < SQ_FT; b++) {
       const u = i * SQ_FT + a + .5, v = j * SQ_FT + b + .5, wa = plan.waterAt(u, v);
       if (wa > 0) { wet++; if (wa > .7) deep++; } else if (over(u, v) || near.some(q => (q.u - u) ** 2 + (q.v - v) ** 2 < q.r * q.r * .8)) brush++;
     }
-    out[j * cols + i] = deep >= 20 ? 2 : wet >= 13 || brush + wet >= 12 ? 1 : 0;
+    out[j * cols + i] = deep >= 20 ? 2 : wet >= 13 || brush + wet >= 12 || go > .5 ? 1 : 0;
   }
   return out;
 }

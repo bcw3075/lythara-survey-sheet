@@ -107,6 +107,13 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
   const coverAt = !cover?.b ? () => 0 : (wx, wy) => { const fi = (wx - cover.x0) * cover.ppm - .5, fj = (cover.y1 - wy) * cover.ppm - .5, i = Math.floor(fi), j = Math.floor(fj), n = cover.n;
     const at = (a, b) => a < 0 || b < 0 || a >= n || b >= n ? 0 : +(cover.b[b * n + a] === "1"), u = fi - i, v = fj - j;
     return (at(i, j) * (1 - u) + at(i + 1, j) * u) * (1 - v) + (at(i, j + 1) * (1 - u) + at(i + 1, j + 1) * u) * v; };
+  /* rough going (the Undergrowth slider beyond the woods): what slows you down on this ground, in patches. Deep drifts on snow,
+     sucking mud on damp ground, loose scree on crag and stony hills. 0..1 at a world foot; the same field is drawn and costed. */
+  const GOING = t => t === T.snow ? "drift" : t === T.damp ? "mud" : t === T.crag || t === T.bad ? "scree" : t === T.hills || t === T.rough ? "stony" : null;
+  const goingF = (gx, gy, t) => { const k = GOING(t); if (!k) return 0;
+    const th = (k === "stony" ? .72 : .66) - tune.brush * .22, n = tbl(gx * .62 + 71, gy * .62 + 19) * .8 + tbl(gx * 2.3 + 5, gy * 2.3 + 44) * .2;   /* tbl features are ~23 units across: patches ~35 ft */
+    return sm(th, th + .1, n); };
+  const goingAt = (u, v) => { const w = W(u, v), t = terrainAt(w.x, w.y); return { kind: GOING(t), g: goingF(w.x * FT_PER_MI, w.y * FT_PER_MI, t) }; };
   /* height in feet: the land model, plus small hummocks */
   const relief = tune.relief >= 0 ? 1 + tune.relief * 4 : 1 + tune.relief * .9;   /* x5 at the top, flattened to a tenth at the bottom */
   const baseElev = (wx, wy) => { const fi = wx * inv - land.i0 - .5, fj = land.j1 - wy * inv - .5, i = Math.floor(fi), j = Math.floor(fj); if (i < 0 || j < 0 || i >= GW - 1 || j >= GH - 1) return 0;
@@ -254,7 +261,7 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     const kind = forest(t) ? (r3 < (t === T.old ? .16 : .1) + lu * .2 ? "fern" : r3 < .38 + lu * .1 ? "leaf" : null) : (t === T.fields || t === T.rough || t === T.hills || t === T.damp) ? (r3 < .34 ? "tuft" : r3 < (t === T.fields ? .37 : .355) + lu * .06 ? "flower" : r4 < lu * .08 ? "fern" : null) : null;
     if (kind) feats.tufts.push({ u, v, kind, r: r4, t });
   });
-  return { cols, rows, Wft, Hft, x0, y1, cx, cy, tune, season, placed: FT, inF, land, terrainAt, coverAt, elevAt, waterAt, roadAt, W, L, lines, feats };
+  return { cols, rows, Wft, Hft, x0, y1, cx, cy, tune, season, placed: FT, inF, land, terrainAt, coverAt, goingF, goingAt, GOING, elevAt, waterAt, roadAt, W, L, lines, feats };
 }
 
 function segDist(px, py, a, b) { const dx = b.u - a.u, dy = b.v - a.v, l2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((px - a.u) * dx + (py - a.v) * dy) / l2)); return Math.hypot(px - a.u - t * dx, py - a.v - t * dy); }
@@ -520,6 +527,24 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
           col = mixc(col, [150, 156, 112], sm(.66, .72, tbl(gx * 9 + 31, gy * 9 + 8)) * .35);   /* lichen ~2.5 ft */
           relief = 12;
         }
+        /* rough going */
+        const go = plan.goingF ? plan.goingF(gx, gy, t) : 0;
+        if (go > 0) { const k = plan.GOING(t);
+          if (k === "drift") {   /* deep drifts: fresh, smooth snow piled into soft pillows that bury the wind ripples; lit from the north-west, blue in the lee */
+            const H = (x, y) => plan.goingF(x, y, t) * (.65 + .35 * tbl(x * 2.4 + 3, y * 2.4 + 61));
+            const sh = (H(gx - 1.6, gy + 1.6) - H(gx + 1.6, gy - 1.6)) * 1.6;
+            col = mixc(col, [242, 245, 250], Math.min(1, go * 1.4) * .8);
+            if (sh < 0) col = mixc(col, [160, 178, 212], Math.min(.55, -sh * 1.4));
+            dAdd = dAdd * (1 - go) + Math.max(-10, Math.min(18, sh * 40)); relief = 3;
+          } else if (k === "mud") {   /* sucking mud: dark, wet, with standing puddles that catch the sky */
+            col = mixc(col, mixc([84, 66, 44], [60, 48, 34], n2), go * .85); const pud = tbl(gx * 6 + 17, gy * 6 + 9);
+            if (pud > .62) { const e = sm(.62, .7, pud) * go; col = mixc(col, [92, 108, 104], e * .8); dAdd += (ihash(gx * 3, gy * 3) > .9 ? 26 : 6) * e; }
+            else dAdd -= 8 * go;
+          } else {   /* loose scree: a skin of small broken stones with dark gaps */
+            const cx_ = Math.floor(gx / 1.3), cy_ = Math.floor(gy / 1.3), hs = ihash(cx_, cy_), fu = gx / 1.3 - cx_ - .5, fv = gy / 1.3 - cy_ - .5;
+            col = mixc(col, mixc([132, 127, 118], [94, 90, 85], hs), go * (k === "stony" ? .6 : .55));
+            dAdd += ((hs - .5) * 30 + (fu * -1 + fv * -1) * 22 - (Math.max(Math.abs(fu), Math.abs(fv)) > .42 ? 30 : 0)) * go;
+          } }
         if (EC) {   /* contour lines every 5 ft, darker every 25 ft, drawn a constant width whatever the slope */
           const e = bil(EC, u, v), ge = Math.hypot(bil(EC, u + .5, v) - bil(EC, u - .5, v), bil(EC, u, v + .5) - bil(EC, u, v - .5)) + 1e-4;
           const c5 = e / 5, dist = Math.abs(c5 - Math.round(c5)) * 5 / ge, idx = Math.round(c5) % 5 === 0, wFt = idx ? .2 : .13;
