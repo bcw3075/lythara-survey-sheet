@@ -442,7 +442,7 @@ function setEncPlacing(on) {
     try {
       const r = await createEncounter({ x: w.x, y: w.y, from: scene.id, name: opts.name, cols: opts.cols, rows: opts.rows, party: !!opts.party, view: true });
       ui.notifications.info(`Made ${r.name}: ${r.cols}×${r.rows} squares${r.members ? `, party placed` : ""}. It's in the Encounter Maps folder.`);
-      ui.controls.activate({ control: "notes", tool: "select" });
+      ui.controls.activate({ control: CONTROL, tool: "select" });
     } catch (e) { ui.notifications.error(e.message); console.error(e); }
     finally { busy = false; ui.notifications.remove?.(note); }
   };
@@ -466,7 +466,7 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
         <div class="lss-row"><input type="text" id="lss-name" placeholder="Region name, e.g. Redthorn Hills" ${isMap ? "" : "disabled"}><button type="button" data-do="make" ${isMap ? "" : "disabled"}>Make a sheet from ${picked.size} picked hex${picked.size === 1 ? "" : "es"}</button></div>
       </section>
       <section><h3>Encounter maps</h3>
-        <p>To plan one ahead, pick the Encounter Map Here tool (the chessboard, in the Notes tools) and click a spot on any sheet or the World Map. Or make one where the party is now:</p>
+        <p>To plan one ahead, pick the Encounter Map Here tool (the chessboard, in the Lythara Maps group of the left-hand bar) and click a spot on any sheet or the World Map. Or make one where the party is now:</p>
         <div class="lss-row"><button type="button" data-do="encParty">Encounter map where the party is</button></div>
       </section>
       <section><h3>This sheet</h3>
@@ -495,7 +495,7 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
     on('[data-do="make"]', () => run(async () => {
       const r = await createSheet({ hexes: [...picked.values()], name: result.querySelector("#lss-name").value });
       picked.clear(); drawPicked();
-      if (ui.controls.tool?.name === "pickHexes") ui.controls.activate({ control: "notes", tool: "select" });   /* leave the pick tool so pins can be dragged again */
+      if (ui.controls.tool?.name === "pickHexes") ui.controls.activate({ control: CONTROL, tool: "select" });   /* leave the pick tool so pins can be dragged again */
       return `Made ${r.name}.`;
     }, true));
     on('[data-do="encParty"]', () => run(async () => { status("Drawing the encounter map… about 15 seconds."); const r = await createEncounter({ view: true }); return `Made ${r.name} with ${r.members} party member${r.members === 1 ? "" : "s"}. It opened for you only; activate it to bring the players.`; }));
@@ -692,11 +692,19 @@ Hooks.once("init", () => {
   game.settings.register(ID, "survey", { scope: "world", config: false, type: Object, default: null });
   game.settings.register(ID, "explored", { scope: "world", config: false, type: Object, default: { version: 1, chunks: {}, harvested: {} } });
 });
+/* the module's own group in the left-hand bar (GM only). It works on the notes layer, so pins stay visible and draggable
+   with its Select tool. */
+const CONTROL = "lythara";
 Hooks.on("getSceneControlButtons", controls => {
-  if (!game.user.isGM || !controls.notes?.tools) return;
-  controls.notes.tools.encounterHere = { name: "encounterHere", title: "Encounter Map Here (click a spot on a sheet or the World Map)", icon: "fa-solid fa-chess-board", order: 97, onChange: (ev, active) => setEncPlacing(active) };
-  controls.notes.tools.pickHexes = { name: "pickHexes", title: "Pick Hexes for a Sheet", icon: "fa-solid fa-draw-polygon", order: 98, onChange: (ev, active) => setPicking(active) };
-  controls.notes.tools.surveySheet = { name: "surveySheet", title: "Survey Sheet", icon: "fa-solid fa-map-location-dot", button: true, order: 99, onChange: () => new SheetPanel().render(true) };
+  if (!game.user.isGM) return;
+  controls[CONTROL] = { name: CONTROL, title: "Lythara Maps", icon: "fa-solid fa-map-location-dot", layer: "notes", order: (controls.notes?.order ?? 10) + 0.5, activeTool: "select",
+    onChange: (ev, active) => { if (!active) { setPicking(false); setEncPlacing(false); } },
+    tools: {
+      select: { name: "select", title: "Select and move pins", icon: "fa-solid fa-expand", order: 1 },
+      pickHexes: { name: "pickHexes", title: "Pick Hexes for a Sheet (click hexes on the World Map)", icon: "fa-solid fa-draw-polygon", order: 2, onChange: (ev, active) => setPicking(active) },
+      encounterHere: { name: "encounterHere", title: "Encounter Map Here (click a spot on a sheet or the World Map)", icon: "fa-solid fa-chess-board", order: 3, onChange: (ev, active) => setEncPlacing(active) },
+      surveySheet: { name: "surveySheet", title: "Survey Sheet window", icon: "fa-solid fa-sliders", button: true, order: 4, onChange: () => new SheetPanel().render(true) }
+    } };
 });
 Hooks.once("ready", () => {
   game.modules.get(ID).api = { applySheet, exportSheet, createSheet, renderSheet, linkSheets, organizeSheets, placePartyOnNewSheet, createEncounter, drawEncounterScene, surveyWorldMap, setWorldOrigin, harvestScene, restoreScene, syncExploration, exploredArea, renderMap, world, picked, PPM, CELL };
