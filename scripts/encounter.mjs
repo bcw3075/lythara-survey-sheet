@@ -172,7 +172,8 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     if (!sp) sp = { kind: t === T.damp ? "willow" : "oakS", col: (t === T.damp ? PAL.willow : PAL.oak)[(r4 * 3) | 0] };
     const [rMin, rMax, tr] = SPECIES[sp.kind] ?? SPECIES.oak, R = (rMin + (rMax - rMin) * r4) * (forest(t) ? 1.02 : .8);
     if (!clearOf(u, v, Math.max(2, tr * 2)) || inF(OPEN_FEATS, u, v, 1.1 + R / 22)) return;   /* crowns stay out of open features */
-    const dead = hash(gx, gy, s + 517) < tune.decay * .7 || inF(["dead"], u, v) && hash(gx, gy, s + 523) < .85;   /* decay kills trees outright */
+    const dz0 = tune.decay ?? 0, snag = forest(t) ? (t === T.old ? .035 : .015) : 0;   /* the land as it is keeps a few natural snags; healthy clears them */
+    const dead = hash(gx, gy, s + 517) < (dz0 >= 0 ? snag + dz0 * .7 : snag * (1 + dz0)) || inF(["dead"], u, v) && hash(gx, gy, s + 523) < .85;   /* decay kills trees outright */
     /* each tree keeps its own timing, a little ahead or behind its neighbours */
     const j = (hash(gx, gy, s + 519) - .5) * .16, Tt = season.T + j, ever = EVERGREEN.has(sp.kind);
     const leaf = ever ? 1 : leafAt(Tt, season.rising), aut = ever ? 0 : autAt(Tt, season.rising), hue = (hash(gx, gy, s + 521) * 4) | 0;
@@ -189,7 +190,7 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
   });
   /* deadfall in the woods */
   lattice(55, 701, (wx, wy, u, v, r3, r4) => {
-    const t = terrainAt(wx, wy), dz = inF(["dead"], u, v); if (!((forest(t) || dz) && r3 < (t === T.old ? .3 : .16) * (1 + Math.max(0, tune.decay) * 2) * (dz ? 3 : 1)) || !clearOf(u, v, 8) || inF(OPEN_FEATS, u, v, 1.1)) return;
+    const t = terrainAt(wx, wy), dz = inF(["dead"], u, v); if (!((forest(t) || dz) && r3 < (t === T.old ? .3 : .16) * ((tune.decay ?? 0) >= 0 ? 1 + tune.decay * 2 : 1 + tune.decay * .85) * (dz ? 3 : 1)) || !clearOf(u, v, 8) || inF(OPEN_FEATS, u, v, 1.1)) return;
     feats.logs.push({ u, v, len: 12 + r4 * 16, ang: r3 * 37 % Math.PI, w: 1.4 + r4 * 1.4 });
   });
   /* stones and boulders on rough and hill ground, and a few on the creek bed */
@@ -432,7 +433,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
   if (EC) for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) { const p = plan.W(i, j); EC[j * fw + i] = plan.elevAt(p.x, p.y); }
   /* slope shading per foot, sampled per pixel */
   const SL = new Float32Array(fw * fh); for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) SL[j * fw + i] = (bil(EF, i - 1.5, j) - bil(EF, i + 1.5, j) + bil(EF, i, j - 1.5) - bil(EF, i, j + 1.5)) * .8;
-  const ox = plan.x0 * FT_PER_MI, oy = plan.y1 * FT_PER_MI, decay = Math.max(0, plan.tune?.decay ?? 0), rel = Math.max(0, plan.tune?.relief ?? 0), sea = plan.season ?? SUMMER, forest = t => t === T.woods || t === T.old;
+  const ox = plan.x0 * FT_PER_MI, oy = plan.y1 * FT_PER_MI, decayS = plan.tune?.decay ?? 0, decay = Math.max(0, decayS), rel = Math.max(0, plan.tune?.relief ?? 0), sea = plan.season ?? SUMMER, forest = t => t === T.woods || t === T.old;
   /* snow at a world foot: drifts lit from the north-west, wind ripples, scoured rocky patches. Returns colour and a shade offset. */
   const snowTex = (gx, gy, col) => { let d = 0;
           /* (the noise table makes features about 23 units across, so an argument of gx * 23 / F gives features F feet wide) */
@@ -478,6 +479,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
         if (sea.snow > 0 && t !== T.snow) { const cov = snowAt(gx, gy, t);
           if (cov > 0) { const sn = snowTex(gx, gy, mixc([222, 228, 238], [206, 214, 228], .5)); col = mixc(col, sn.col, cov); dAdd += sn.d * cov; } }
         /* decay: grass and moss go grey-brown in patches */
+        if (decayS < 0 && t !== T.snow && t !== T.crag && !(sea.snow > .5)) col = mixc(col, mixc([92, 142, 52], [70, 120, 44], n2), -decayS * .22);   /* healthy: lusher, greener growth */
         if (decay > 0 && t !== T.snow && t !== T.crag) col = mixc(col, mixc([134, 122, 88], [100, 92, 72], n2), decay * (.4 + .5 * sm(.3, .7, tbl(gx * .6 + 3, gy * .6 + 8))));
         const sl = bil(SL, u, v);
         /* wind-packed snow: low ripples across the wind (from the north-west), blue-grey in the hollows, drifts, a little sparkle */
