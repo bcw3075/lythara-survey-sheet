@@ -287,7 +287,7 @@ function traceZero(c, F, fw, fh, ppf) {
 /* ---------- realistic painting (the "real" style, grown out of "painted") ----------
    Colour varies, not just brightness; grass and litter are drawn blade by blade and leaf by leaf; canopies are hundreds of
    lit leaf clusters with soft cast shadows; water shows the bed through the shallows, flows, and foams at the edges.
-   layers: "all" (one image), "ground" (no canopies; for the map) or "canopy" (canopies only, transparent; for an overhead tile). */
+   layers: "all" (one image), "ground" (ground and undergrowth, no tree crowns; for the map) or "canopy" (tree crowns only, transparent; for an overhead tile). */
 const ihash = (x, y) => { let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 const sm = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 /* Colours measured from 60-odd straight-down summer drone photos of temperate woods, meadows and creeks (Unsplash, Nov 2026):
@@ -413,9 +413,10 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
       const g = c.createRadialGradient(x - r * .3, y - r * .3, r * .1, x, y, r * 1.2); g.addColorStop(0, "#7a6046"); g.addColorStop(.7, "#4e3a26"); g.addColorStop(1, "#2a1f14"); c.fillStyle = g;
       c.beginPath(); for (let k = 0; k < 9; k++) { const a = k / 9 * 6.283, rr = r * (k % 2 ? 1 : 1.35); k ? c.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr) : c.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); } c.closePath(); c.fill(); }
   }
+  /* undergrowth is ground-level: it belongs to the map image, not the overhead canopy that fades */
+  if (layers !== "canopy") for (const b of plan.feats.brush) realCanopy(c, b.u * ppf, b.v * ppf, b.r * ppf, null, b.u * 13 + b.v * 7, ppf, .8, "brush");
   if (layers !== "ground") {
-    /* undergrowth then canopies, small first so big crowns sit on top */
-    for (const b of plan.feats.brush) realCanopy(c, b.u * ppf, b.v * ppf, b.r * ppf, null, b.u * 13 + b.v * 7, ppf, .8, "brush");
+    /* canopies, small first so big crowns sit on top */
     const trees = plan.feats.trees.slice().sort((a, b) => a.R - b.R);
     for (const t of trees) {
       const x = t.u * ppf, y = t.v * ppf, R = t.R * ppf, col = hex(t.col);

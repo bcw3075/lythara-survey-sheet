@@ -2,6 +2,7 @@ import { PPM, renderMap } from "./render.mjs";
 import { CELL, lineCourse } from "./land.mjs";
 import { classifyImage, surveyToPng, surveyFromPng, surveySlice, SURVEY_FILE, SURVEY_VERSION } from "./survey.mjs";
 import { harvestScene, restoreScene, syncExploration, exploredArea } from "./explore.mjs";
+import { planEncounter, drawEncounter, FT_PER_MI, SQ_FT } from "./encounter.mjs";
 
 const ID = "lythara-survey-sheet";
 const IMAGE_DIR = "assets/map-tools";
@@ -521,6 +522,120 @@ function queueLayout() {
 }
 for (const hook of ["canvasReady", "canvasPan", "drawNote", "refreshNote", "createNote", "updateNote", "deleteNote"]) Hooks.on(hook, queueLayout);
 
+/* ---------- encounter maps ----------
+   A battle map at 5-ft squares for any point in the world, drawn from the same land as the sheets. The ground (with
+   undergrowth) is the level's background; tree crowns are one overhead tile that fades when a token walks beneath;
+   thick trunks are short walls; undergrowth and water are PF2e difficult terrain. The map remembers where in the world
+   it sits, so it can grow at an edge and the party can go back to the same spot on the sheet afterwards. */
+const ENC_FOLDER = "Encounter Maps", ENC_PX = 100, ENC_MAX = 120, CANOPY_ELEV = 20, TRUNK_WALL_FT = 1.5;
+const encFolder = async () => game.folders.find(f => f.type === "Scene" && f.name === ENC_FOLDER) ?? Folder.create({ name: ENC_FOLDER, type: "Scene" });
+async function uploadCanvas(cv, name) {
+  const blob = await new Promise(res => cv.toBlob(res, "image/webp", 0.86));
+  if (!blob) throw new Error("This browser couldn't make the map image.");
+  try { await FP().createDirectory("data", IMAGE_DIR); } catch (e) { /* already there */ }
+  const up = await FP().upload("data", IMAGE_DIR, new File([blob], name, { type: "image/webp" }), {}, { notify: false });
+  if (!up?.path) throw new Error("Foundry refused the map upload. Check this user can upload files.");
+  return { path: up.path, bytes: blob.size };
+}
+/** The world data an encounter map is planned from: the survey around the point, the seed, paint and lines. */
+async function encounterInput(cx, cy, cols, rows) {
+  const w = world(), { meta, data } = await loadSurvey(), m = Math.max(cols, rows) * SQ_FT / FT_PER_MI / 2 + 1.5;
+  return { seed: w.seed, slice: surveySlice(data, meta, { x0: cx - m, x1: cx + m, y0: cy - m, y1: cy + m }), paint: w.paint, lines: w.lines, pins: w.pins };
+}
+/* each 5-ft square: 0 plain, 1 difficult (undergrowth or shallow water), 2 greater difficult (deep water: the middle of a river or wide creek; a
+   narrow creek is shallow throughout); 25 samples a square */
+function squareCosts(plan) {
+  const { cols, rows } = plan, out = new Uint8Array(cols * rows), B = plan.feats.brush;
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    const near = B.filter(b => Math.abs(b.u - (i * SQ_FT + 2.5)) < b.r + 3 && Math.abs(b.v - (j * SQ_FT + 2.5)) < b.r + 3);
+    let wet = 0, deep = 0, brush = 0;
+    for (let a = 0; a < SQ_FT; a++) for (let b = 0; b < SQ_FT; b++) {
+      const u = i * SQ_FT + a + .5, v = j * SQ_FT + b + .5, wa = plan.waterAt(u, v);
+      if (wa > 0) { wet++; if (wa > .7) deep++; } else if (near.some(q => (q.u - u) ** 2 + (q.v - v) ** 2 < q.r * q.r * .8)) brush++;
+    }
+    out[j * cols + i] = deep >= 20 ? 2 : wet >= 13 || brush + wet >= 12 ? 1 : 0;
+  }
+  return out;
+}
+/* squares of one cost as rectangles: runs along each row, merged down while the run below matches */
+function costRects(costs, cols, rows, want) {
+  const runs = [];
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols;) { if (costs[j * cols + i] !== want) { i++; continue; } let e = i; while (e < cols && costs[j * cols + e] === want) e++; runs.push({ i, e, j, h: 1 }); i = e; }
+  const out = [];
+  for (const r of runs) { const up = out.find(o => o.i === r.i && o.e === r.e && o.j + o.h === r.j); if (up) up.h++; else out.push({ ...r }); }
+  return out;
+}
+/** Build (or rebuild) the encounter scene's images, walls and terrain from its saved world position. */
+async function drawEncounterScene(scene) {
+  const st = scene.getFlag(ID, "encounter"), { cx, cy, cols, rows } = st;
+  const plan = planEncounter(await encounterInput(cx, cy, cols, rows), { cx, cy, cols, rows });
+  const ground = drawEncounter(plan, "real", ENC_PX, "ground"), canopy = drawEncounter(plan, "real", ENC_PX, "canopy");
+  const rev = foundry.utils.randomID(6), slot = st.slot === "a" ? "b" : "a";
+  const g = await uploadCanvas(ground, `${scene.id}-enc-${slot}.webp`), c = await uploadCanvas(canopy, `${scene.id}-enc-${slot}-canopy.webp`);
+  await scene.levels.contents[0].update({ background: { src: `${g.path}?v=${rev}` } });
+  const d = scene.dimensions, ox = d.sceneX, oy = d.sceneY, ppf = ENC_PX / SQ_FT;
+  /* clear what this module drew before */
+  for (const type of ["Tile", "Wall", "Region"]) { const ids = scene.getEmbeddedCollection(type).filter(x => x.getFlag(ID, "enc")).map(x => x.id); if (ids.length) await scene.deleteEmbeddedDocuments(type, ids); }
+  await scene.createEmbeddedDocuments("Tile", [{ x: ox, y: oy, width: d.sceneWidth, height: d.sceneHeight, elevation: CANOPY_ELEV, texture: { src: `${c.path}?v=${rev}` },
+    occlusion: { modes: [CONST.OCCLUSION_MODES.FADE], alpha: 0.15 }, flags: { [ID]: { enc: "canopy" } } }]);
+  /* trunks thick enough to hide behind */
+  const walls = [], N = CONST.WALL_SENSE_TYPES.NORMAL;
+  for (const t of plan.feats.trees) { if (t.trunk < TRUNK_WALL_FT || t.u < 0 || t.v < 0 || t.u > plan.Wft || t.v > plan.Hft) continue;
+    const x = ox + t.u * ppf, y = oy + t.v * ppf, r = t.trunk * ppf, pts = [...Array(6)].map((_, k) => [Math.round(x + Math.cos(k * Math.PI / 3) * r), Math.round(y + Math.sin(k * Math.PI / 3) * r)]);
+    for (let k = 0; k < 6; k++) walls.push({ c: [...pts[k], ...pts[(k + 1) % 6]], move: CONST.WALL_MOVEMENT_TYPES.NORMAL, sight: N, light: N, sound: CONST.WALL_SENSE_TYPES.NONE, flags: { [ID]: { enc: "trunk" } } }); }
+  if (walls.length) await scene.createEmbeddedDocuments("Wall", walls);
+  /* difficult terrain */
+  const costs = squareCosts(plan), regions = [];
+  for (const [want, name, walk, color] of [[1, "Difficult terrain (undergrowth, shallow water)", 2, "#8a7a2a"], [2, "Deep water (greater difficult)", 3, "#2a5a8a"]]) {
+    const rects = costRects(costs, cols, rows, want); if (!rects.length) continue;
+    regions.push({ name, color, visibility: CONST.REGION_VISIBILITY.LAYER, flags: { [ID]: { enc: "terrain" } },
+      shapes: rects.map(r => ({ type: "rectangle", x: ox + r.i * ENC_PX, y: oy + r.j * ENC_PX, width: (r.e - r.i) * ENC_PX, height: r.h * ENC_PX, rotation: 0, hole: false })),
+      behaviors: [{ name, type: "modifyMovementCost", system: { difficulties: { walk } } }] });
+  }
+  if (regions.length) await scene.createEmbeddedDocuments("Region", regions);
+  await scene.setFlag(ID, "encounter", { ...st, slot, rev });
+  return { trees: plan.feats.trees.length, brush: plan.feats.brush.length, walls: walls.length, difficult: costs.filter(v => v === 1).length, deep: costs.filter(v => v === 2).length, bytes: g.bytes + c.bytes };
+}
+/* where the party is in the world: its token on the active sheet, else its marker on the World Map */
+function partyWorldPoint() {
+  const party = partyActor(); if (!party) return null;
+  const s = game.scenes.active, own = s?.getFlag(ID, "state")?.frame ? partyOn(s, party) : [];
+  if (own.length) { const c = centroid(own); return { ...toMiles(s, c.x, c.y), from: s.id }; }
+  const meta = survey(), marker = meta?.sceneId && game.scenes.get(meta.sceneId)?.tokens.find(t => t.actorId === party.id);
+  return marker ? { ...mapGeometry().toWorld(tokenCentre(marker)), from: meta.sceneId } : null;
+}
+/** Make an encounter map at a world point (default: where the party is) and put the party's members in the middle. */
+export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, activate = false } = {}) {
+  if (!game.user.isGM) throw new Error("Only a GM can make an encounter map.");
+  let at = Number.isFinite(+x) && Number.isFinite(+y) ? { x: num(x, 20000), y: num(y, 20000), from } : partyWorldPoint();
+  if (!at) throw new Error("Couldn't find the party. Give a world point, or put the party token on a sheet or the World Map.");
+  cols = Math.max(10, Math.min(ENC_MAX, Math.round(+cols) || 40)); rows = Math.max(10, Math.min(ENC_MAX, Math.round(+rows) || 40));
+  const src = game.scenes.get(at.from);
+  name = String(name ?? "").trim().slice(0, 120) || `Encounter: ${src?.name ?? "the wilds"} (${at.x.toFixed(2)}, ${at.y.toFixed(2)})`;
+  const scene = await Scene.create({ name, folder: (await encFolder()).id, navigation: false, width: cols * ENC_PX, height: rows * ENC_PX, padding: 0.1,
+    grid: { type: CONST.GRID_TYPES.SQUARE, size: ENC_PX, distance: SQ_FT, units: "ft", alpha: 0.18 }, tokenVision: true, fog: { mode: 2 },
+    environment: { globalLight: { enabled: true } }, flags: { [ID]: { encounter: { version: 1, cx: at.x, cy: at.y, cols, rows, from: at.from ?? null } } } });
+  const drawn = await drawEncounterScene(scene);
+  const members = await placeMembers(scene);
+  if (activate) await scene.activate();
+  return { ok: true, scene: scene.id, name: scene.name, at, cols, rows, members, ...drawn };
+}
+/* the party's members around the middle of the map, on open squares, in a loose ring */
+async function placeMembers(scene) {
+  const party = partyActor(); if (!party) return 0;
+  const st = scene.getFlag(ID, "encounter"), d = scene.dimensions, actors = party.members.filter(a => !scene.tokens.some(t => t.actorId === a.id));
+  const blocked = new Set(scene.regions.filter(r => r.getFlag(ID, "enc")).flatMap(r => r.shapes.flatMap(sh => { const out = []; for (let x = sh.x; x < sh.x + sh.width; x += ENC_PX) for (let y = sh.y; y < sh.y + sh.height; y += ENC_PX) out.push(`${x},${y}`); return out; })));
+  const ci = Math.floor(st.cols / 2), cj = Math.floor(st.rows / 2), spots = [];
+  for (let ring = 0; spots.length < actors.length && ring < 12; ring++) for (let di = -ring; di <= ring; di++) for (let dj = -ring; dj <= ring; dj++) {
+    if (Math.max(Math.abs(di), Math.abs(dj)) !== ring || spots.length >= actors.length) continue;
+    const x = d.sceneX + (ci + di) * ENC_PX, y = d.sceneY + (cj + dj) * ENC_PX; if (!blocked.has(`${x},${y}`) && !spots.some(s => Math.abs(s.x - x) < ENC_PX * 2 && Math.abs(s.y - y) < ENC_PX * 2)) spots.push({ x, y });
+  }
+  const data = [];
+  for (let k = 0; k < actors.length && k < spots.length; k++) { const t = (await actors[k].getTokenDocument({ x: 0, y: 0 })).toObject(); Object.assign(t, spots[k]); data.push(t); }
+  if (data.length) await scene.createEmbeddedDocuments("Token", data, { [ID]: { [SYNC]: true } });
+  return data.length;
+}
+
 /* ---------- start ---------- */
 Hooks.once("init", () => {
   game.settings.register(ID, "world", { scope: "world", config: false, type: Object, default: WORLD_DEFAULT });
@@ -534,7 +649,7 @@ Hooks.on("getSceneControlButtons", controls => {
   controls.notes.tools.surveySheet = { name: "surveySheet", title: "Survey Sheet", icon: "fa-solid fa-map-location-dot", button: true, order: 99, onChange: () => new SheetPanel().render(true) };
 });
 Hooks.once("ready", () => {
-  game.modules.get(ID).api = { applySheet, exportSheet, createSheet, renderSheet, linkSheets, organizeSheets, placePartyOnNewSheet, surveyWorldMap, setWorldOrigin, harvestScene, restoreScene, syncExploration, exploredArea, renderMap, world, picked, PPM, CELL };
+  game.modules.get(ID).api = { applySheet, exportSheet, createSheet, renderSheet, linkSheets, organizeSheets, placePartyOnNewSheet, createEncounter, drawEncounterScene, surveyWorldMap, setWorldOrigin, harvestScene, restoreScene, syncExploration, exploredArea, renderMap, world, picked, PPM, CELL };
   /* the active GM quietly keeps the world record up to date from whatever sheet the party is on */
   if (game.user.isGM) setInterval(() => { const s = game.scenes.active; if (s?.getFlag(ID, "state")?.frame && game.users.activeGM?.isSelf) harvestScene(s).catch(() => {}); }, 120000);
 });
