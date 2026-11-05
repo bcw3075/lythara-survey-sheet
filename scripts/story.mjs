@@ -25,7 +25,7 @@ export function makeStory(land) {
   const isEdge = (x, y, n = .42) => forest(tAt(x + n, y)) || forest(tAt(x - n, y)) || forest(tAt(x, y + n)) || forest(tAt(x, y - n));
   const openNear = (x, y, n = .8) => open(tAt(x + n, y)) || open(tAt(x - n, y)) || open(tAt(x, y + n)) || open(tAt(x, y - n));
   /* altitude: woods turn from broadleaf to mixed to conifer as the ground climbs into the mountains (HEIGHTS.mtnMin is 2,000 ft;
-     snow-capped crags here stand near 3,400 ft). 0 at 1,800 ft, 1 at 2,600 ft, at Stoneclaim's latitude; the bands fall going north with the snowline. */
+     snow-capped crags here stand near 3,400 ft). 0 at 1,800 ft, 1 at 2,600 ft, at the origin's latitude; the bands fall going north with the snowline. */
   const montane = (x, y) => { const k = snowlineAt(y) / 7000; return (elevAt(x, y) - 1800 * k) / (800 * Math.max(.3, k)); };
   function speciesAt(x, y, t) {
     const base = speciesLow(x, y, t); if (!base) return base;

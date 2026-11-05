@@ -30,7 +30,7 @@ const PAL = { oak: ["#616531", "#717436", "#535a2d", "#6a6e33"], old: ["#3c4324"
 /* Season at a spot. f = fraction of the year since the coldest day (0..1, from the calendar). How warm a spot is comes from
    how far it sits below the permanent snowline, which already folds in latitude and height. T is a rough "warmth" now:
    below ~.1 snow lies; leaves come out between .35 and .65 while warming and colour then fall between .78 and .5 while
-   cooling. Stoneclaim's lowland (w ≈ .94) gets light snow in deep winter and leaves out in late spring. */
+   cooling. The origin's lowland (w ≈ .94) gets light snow in deep winter and leaves out in late spring. */
 export function seasonState(f, elev, y) {
   const w = Math.max(-.5, Math.min(1.3, (snowlineAt(y) - elev) / 7000)), a = 2 * Math.PI * f;
   const T = w - .55 * Math.cos(a) - .35, rising = Math.sin(a) > 0;

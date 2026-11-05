@@ -7,7 +7,7 @@ export const CELL = 0.125;
    feet with a 1/e distance of `inlandMiles`, rolling by ±roll. Hills stand hillMin..hillMax over the lowland. Mountain rock
    stands mtnMin over the lowland at the edge of a range and up to mtnMax `massMiles` into it. Snow lies above the snowline. */
 export const HEIGHTS = { inland: 1500, inlandMiles: 150, roll: 160, hillMin: 350, hillMax: 1250, mtnMin: 2000, mtnMax: 7000, massMiles: 10, snowline: 7000, polarMiles: 1150 };
-/* Latitude: the snowline is `snowline` feet at the world origin (Stoneclaim, temperate with hard winters) and falls to the sea
+/* Latitude: the snowline is `snowline` feet at the world origin (temperate with hard winters) and falls to the sea
    `polarMiles` north of it, where the world map's snow is cold ground rather than high ground; it rises the same way southward. */
 export const snowlineAt = y => HEIGHTS.snowline * Math.max(0, Math.min(2, 1 - y / HEIGHTS.polarMiles));
 export const T = { fields: 0, rough: 1, woods: 2, old: 3, damp: 4, water: 5, hills: 6, bad: 7, crag: 8, snow: 9 };

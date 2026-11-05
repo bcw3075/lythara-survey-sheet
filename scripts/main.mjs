@@ -744,7 +744,7 @@ function costRects(costs, cols, rows, want) {
   return out;
 }
 /* ---------- the calendar: where in the year and the day we are ----------
-   Simple Calendar (Reborn) when it is running, so Lythara's own months and seasons count; the coldest day is the middle of
+   Simple Calendar (Reborn) when it is running, so the world's own months and seasons count; the coldest day is the middle of
    its Winter season. Without it, the Gregorian year with the coldest day on 20 January. */
 function calendarNow() {
   const SC = globalThis.SimpleCalendar?.api, wt = game.time.worldTime;
@@ -762,7 +762,7 @@ function calendarNow() {
   const t = new Date(wt * 1000), start = Date.UTC(t.getUTCFullYear(), 0, 1), doy = (t - start) / 864e5;
   return { yearFrac: (((doy - 20) / 365) % 1 + 1) % 1, hour: t.getUTCHours() + t.getUTCMinutes() / 60, label: t.toISOString().slice(0, 10), source: "world clock" };
 }
-/* Day length from latitude and date. World y (miles north of Stoneclaim) is taken as latitude 45° at Stoneclaim, rising to
+/* Day length from latitude and date. World y (miles north of the origin) is taken as latitude 45° at the origin, rising to
    70° where snow reaches the sea 1,150 miles north. The solstices fall about ten days before the coldest and warmest days. */
 function sunTimes(yearFrac, y) {
   const lat = Math.max(-80, Math.min(80, 45 + y / 1150 * 25)) * Math.PI / 180, dec = -23.44 * Math.cos(2 * Math.PI * (yearFrac + 10 / 365)) * Math.PI / 180;
