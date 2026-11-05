@@ -431,7 +431,7 @@ async function askEncounter(scene, w) {
       <div class="form-group"><label>Squares down</label><input type="number" name="rows" value="40" min="10" max="${ENC_MAX}" step="1"></div>
       <div class="form-group"><label>Put the party there</label><input type="checkbox" name="party"></div>
       <fieldset><legend>Tune the spot (middle = the land as it is)</legend>${TUNE_LABELS.map(([k, label, lo, hi]) =>
-        `<div class="form-group"><label>${label}</label><span class="hint">${lo}</span><input type="range" name="tune_${k}" min="-100" max="100" step="10" value="0" style="flex:2"><span class="hint">${hi}</span></div>`).join("")}</fieldset>
+        `<div style="display:grid;grid-template-columns:6.5em 5.5em 1fr 6.5em;align-items:center;gap:.4em;margin:.15em 0"><label>${label}</label><span class="hint" style="text-align:right;margin:0">${lo}</span><input type="range" name="tune_${k}" min="-100" max="100" step="10" value="0"><span class="hint" style="margin:0">${hi}</span></div>`).join("")}</fieldset>
       <p class="hint">Leave the party unticked to plan ahead. The map opens for you only; players don't see it until you activate it.</p>` }).catch(() => null);
 }
 function setEncPlacing(on) {
