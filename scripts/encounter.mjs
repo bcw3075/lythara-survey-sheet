@@ -112,7 +112,7 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
     /* rises, hollows and a ridged spine (feet), only when relief is turned up: knolls ~120 ft across, up to ~25 ft high */
     const n1 = fbm(fx / 120, fy / 120, 3, s + 351), n2 = fbm(fx / 40, fy / 40, 2, s + 353), ridge = 1 - Math.abs(fbm(fx / 200, fy / 200, 2, s + 355) * 2 - 1);
     const hum = (n1 - .5) * 130 + (n2 - .5) * 26 + (ridge - .6) * 40;   /* fbm sits near .5, so these give roughly ±20 ft */
-    return e0 + (baseElev(wx, wy) - e0) * relief + hum * Math.max(0, tune.relief); };
+    return e0 + (baseElev(wx, wy) - e0) * Math.min(1, relief) + hum * Math.max(0, tune.relief); };   /* up: adds rises and hollows; down: flattens */
   /* lines that pass near the map, bent a little more at close range */
   const pad = 60, lines = [];
   for (const l of land.lines) {
@@ -433,6 +433,23 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
   /* slope shading per foot, sampled per pixel */
   const SL = new Float32Array(fw * fh); for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) SL[j * fw + i] = (bil(EF, i - 1.5, j) - bil(EF, i + 1.5, j) + bil(EF, i, j - 1.5) - bil(EF, i, j + 1.5)) * .8;
   const ox = plan.x0 * FT_PER_MI, oy = plan.y1 * FT_PER_MI, decay = Math.max(0, plan.tune?.decay ?? 0), rel = Math.max(0, plan.tune?.relief ?? 0), sea = plan.season ?? SUMMER, forest = t => t === T.woods || t === T.old;
+  /* snow at a world foot: drifts lit from the north-west, wind ripples, scoured rocky patches. Returns colour and a shade offset. */
+  const snowTex = (gx, gy, col) => { let d = 0;
+          /* (the noise table makes features about 23 units across, so an argument of gx * 23 / F gives features F feet wide) */
+          /* drifts about 40 and 15 ft across, lit from the north-west: bright windward faces, blue lee shade */
+          const hD = (x, y) => tbl(x * .58 + 7, y * .58 + 1) * .6 + tbl(x * 1.5 + 3, y * 1.5 + 5) * .4;
+          const lit = (hD(gx - .7, gy + .7) - hD(gx + .7, gy - .7)) * 3;
+          const along = gx * .8 + gy * .6, across = gy * .8 - gx * .6, bend = tbl(gx * .9 + 3, gy * .9 + 9) * 3;
+          const rip = tbl(along * 1.4 + 2, across * 8 + bend);             /* wind ripples (sastrugi) about 3 ft apart */
+          col = mixc(col, [158, 176, 208], sm(.0, .25, -lit) * .8 + sm(.3, .55, 1 - rip) * .2);
+          col = mixc(col, [252, 252, 254], sm(.0, .2, lit) * .6);
+          d += lit * 30 + (rip - .5) * 18;
+          /* wind-scoured patches, about 50 ft, where rock and frozen scree show through */
+          const sc = tbl(gx * .46 + 50, gy * .46 + 20) * .7 + tbl(gx * 3 + 9, gy * 3 + 31) * .3;
+          if (sc > .64) { const k = sm(.64, .74, sc); col = mixc(col, mixc([126, 120, 110], [86, 82, 78], ihash(gx * 3, gy * 3)), k * .85); d += (ihash(gx * 6, gy * 6) - .5) * 34 * k; }
+          if (ihash(gx * 9, gy * 9) > .996) col = [255, 255, 255];
+        
+    return { col, d }; };
   /* lying snow: patchy at first (drifts fill hollows), whole when deep; a little thinner under trees */
   const snowPn = (gx, gy) => tbl(gx * .7 + 61, gy * .7 + 17) * .75 + tbl(gx * 1.8 + 3, gy * 1.8 + 5) * .25;
   const snowAt = (gx, gy, t) => sea.snow <= 0 || t === T.snow ? 0 : sm(0, .1, sea.snow * 1.3 - (1 - snowPn(gx, gy)) * .9 + (forest(t) ? -.07 : 0));
@@ -445,6 +462,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
       const v = py / ppf;
       for (let px = 0; px < w; px++) {
         const u = px / ppf, t = tAt(u, v), gx = ox + u, gy = oy - v;
+        let relief = 6 * (1 + rel * 1.5), dAdd = 0;
         const pal = REAL[t] ?? REAL[T.rough], nA = tbl(gx / 16, gy / 16), nB = tbl(gx / 5 + 11, gy / 5 + 29), n2 = tbl(gx / 2.3 + 40, gy / 2.3 + 17), n3 = tbl(gx / .7 + 9, gy / .7 + 3);
         let col = mixc(pal[0], pal[1], sm(.2, .8, nA * .45 + nB * .55));
         /* bare earth showing through grass */
@@ -458,27 +476,12 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
         if (sea.fresh > 0 && (t === T.fields || t === T.rough || t === T.hills || t === T.damp)) col = mixc(col, [118, 166, 58], sea.fresh * .35);
         if (sea.autumn > 0 && (t === T.woods || t === T.old)) col = mixc(col, mixc([150, 96, 40], [120, 70, 30], n2), sea.autumn * .55 * sm(.35, .6, tbl(gx * 2 + 4, gy * 2 + 9)));
         if (sea.snow > 0 && t !== T.snow) { const cov = snowAt(gx, gy, t);
-          if (cov > 0) col = mixc(col, mixc([236, 240, 246], [196, 206, 224], sm(.5, .8, 1 - snowPn(gx, gy))), cov); }
+          if (cov > 0) { const sn = snowTex(gx, gy, mixc([222, 228, 238], [206, 214, 228], .5)); col = mixc(col, sn.col, cov); dAdd += sn.d * cov; } }
         /* decay: grass and moss go grey-brown in patches */
         if (decay > 0 && t !== T.snow && t !== T.crag) col = mixc(col, mixc([134, 122, 88], [100, 92, 72], n2), decay * (.4 + .5 * sm(.3, .7, tbl(gx * .6 + 3, gy * .6 + 8))));
         const sl = bil(SL, u, v);
-        let relief = 6 * (1 + rel * 1.5), dAdd = 0;
         /* wind-packed snow: low ripples across the wind (from the north-west), blue-grey in the hollows, drifts, a little sparkle */
-        if (t === T.snow) {
-          /* (the noise table makes features about 23 units across, so an argument of gx * 23 / F gives features F feet wide) */
-          /* drifts about 40 and 15 ft across, lit from the north-west: bright windward faces, blue lee shade */
-          const hD = (x, y) => tbl(x * .58 + 7, y * .58 + 1) * .6 + tbl(x * 1.5 + 3, y * 1.5 + 5) * .4;
-          const lit = (hD(gx - .7, gy + .7) - hD(gx + .7, gy - .7)) * 3;
-          const along = gx * .8 + gy * .6, across = gy * .8 - gx * .6, bend = tbl(gx * .9 + 3, gy * .9 + 9) * 3;
-          const rip = tbl(along * 1.4 + 2, across * 8 + bend);             /* wind ripples (sastrugi) about 3 ft apart */
-          col = mixc(col, [158, 176, 208], sm(.0, .25, -lit) * .8 + sm(.3, .55, 1 - rip) * .2);
-          col = mixc(col, [252, 252, 254], sm(.0, .2, lit) * .6);
-          dAdd += lit * 30 + (rip - .5) * 18;
-          /* wind-scoured patches, about 50 ft, where rock and frozen scree show through */
-          const sc = tbl(gx * .46 + 50, gy * .46 + 20) * .7 + tbl(gx * 3 + 9, gy * 3 + 31) * .3;
-          if (sc > .64) { const k = sm(.64, .74, sc); col = mixc(col, mixc([126, 120, 110], [86, 82, 78], ihash(gx * 3, gy * 3)), k * .85); dAdd += (ihash(gx * 6, gy * 6) - .5) * 34 * k; }
-          relief = 14; if (ihash(gx * 9, gy * 9) > .996) col = [255, 255, 255];
-        }
+        if (t === T.snow) { const sn = snowTex(gx, gy, col); col = sn.col; dAdd += sn.d; relief = 14; }
         /* bare crag: cracked, banded stone with dark fissures and lichen */
         if (t === T.crag || t === T.bad) {
           const band = tbl(gx * 1.1 + 2, gy * 3 + 5), fis = tbl(gx * 5 + 13, gy * 14 + 4);   /* bands ~20 ft, fissures ~4 ft */
@@ -492,7 +495,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
           const c5 = e / 5, dist = Math.abs(c5 - Math.round(c5)) * 5 / ge, idx = Math.round(c5) % 5 === 0, wFt = idx ? .2 : .13;
           if (dist < wFt) dAdd -= (idx ? 34 : 20) * rel * (1 - dist / wFt);
         }
-        let d = (n3 - .5) * 10 + (ihash(gx * 10, gy * 10) - .5) * 7 + sl * relief + dAdd;
+        let d = (n3 - .5) * 10 + (ihash(gx * 10, gy * 10) - .5) * 7 + Math.max(-40, Math.min(40, sl * relief)) + dAdd;
         const wa = bil(WF, u, v), rd = bil(RF, u, v);
         if (rd < 6.5) { const e = sm(6.5, 4.8, rd); col = mixc(col, mixc([138, 116, 82], [118, 98, 70], n2), e); if (Math.abs(rd - 2.6) < .7) d -= 18 * e; if (ihash(gx * 4, gy * 4) > .93) d += 24 * e; }
         if (wa > -.55 && wa <= 0) { /* wet mud and pebbles on the banks */
