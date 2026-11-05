@@ -70,7 +70,7 @@ Picked hexes plus a 3-mile margin, at 150 px per mile, capped near 16,000 px (We
 - Avoid per-pixel random texture (it reads as static); build texture from shapes.
 
 ## Testing
-- **Local:** serve a folder over http (ES modules don't load from file://) with `scripts` symlinked to this repo, and render `planEncounter` / `drawEncounter` jobs in headless Chromium. Check every terrain, season, and each slider at both ends, at full view and close up.
+- **Local:** `tools/test/` (see its README) renders encounter maps in headless Chromium from sheet exports kept in the git-ignored `tools/test/data/`. Check every terrain, season, and each slider at both ends, at full view and close up.
 - **In Foundry, after installing:** use the real buttons and clicks. Check as GM and as a player in a second tab, run an ordinary build as a regression test, and check land parity after land changes.
 
 ## Releasing
