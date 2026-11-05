@@ -688,6 +688,10 @@ async function drawEncounterScene(scene) {
   }
   if (regions.length) await scene.createEmbeddedDocuments("Region", regions);
   await scene.setFlag(ID, "encounter", { ...st, slot, rev, drawnFor: cal.label, yearFrac: +cal.yearFrac.toFixed(4) });
+  /* this module sets the darkness (day length by latitude), so PF2e's own world-clock sync is switched off for the scene;
+     global light only while it is light enough */
+  if (scene.getFlag("pf2e", "syncDarkness") !== "disabled" || (scene.environment?.globalLight?.darkness?.max ?? 1) > .5)
+    await scene.update({ "flags.pf2e.syncDarkness": "disabled", "environment.globalLight.darkness.max": .5 });
   await syncEncounterDarkness([scene]);
   const sea = plan.season;
   return { date: cal.label, season: { warmth: +sea.T.toFixed(2), leaf: +sea.leaf.toFixed(2), autumn: +sea.autumn.toFixed(2), snow: +sea.snow.toFixed(2) }, darkness: scene.environment?.darknessLevel, trees: plan.feats.trees.length, brush: plan.feats.brush.length, walls: walls.length, difficult: costs.filter(v => v === 1).length, deep: costs.filter(v => v === 2).length, bytes: g.bytes + c.bytes };
