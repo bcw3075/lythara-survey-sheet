@@ -59,8 +59,10 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune }) {
     const u = fi - i, v = fj - j, k = j * GW + i; return (E[k] * (1 - u) + E[k + 1] * u) * (1 - v) + (E[k + GW] * (1 - u) + E[k + GW + 1] * u) * v; };
   const e0 = baseElev(cx, cy);
   const elevAt = (wx, wy) => { const fx = wx * FT_PER_MI, fy = wy * FT_PER_MI;
-    const hum = (fbm(fx / 140, fy / 140, 3, s + 351) - .5) * 30 + (fbm(fx / 45, fy / 45, 2, s + 353) - .5) * 8;   /* rises and hollows (feet), only when relief is turned up */
-    return e0 + (baseElev(wx, wy) - e0) * relief + hum * Math.max(0, tune.relief) * 1.6; };
+    /* rises, hollows and a ridged spine (feet), only when relief is turned up: knolls ~120 ft across, up to ~25 ft high */
+    const n1 = fbm(fx / 120, fy / 120, 3, s + 351), n2 = fbm(fx / 40, fy / 40, 2, s + 353), ridge = 1 - Math.abs(fbm(fx / 200, fy / 200, 2, s + 355) * 2 - 1);
+    const hum = (n1 - .5) * 130 + (n2 - .5) * 26 + (ridge - .6) * 40;   /* fbm sits near .5, so these give roughly ±20 ft */
+    return e0 + (baseElev(wx, wy) - e0) * relief + hum * Math.max(0, tune.relief); };
   /* lines that pass near the map, bent a little more at close range */
   const pad = 60, lines = [];
   for (const l of land.lines) {
@@ -332,9 +334,12 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
     const w0 = (1 - fa) * (1 - fb), w1 = fa * (1 - fb), w2 = (1 - fa) * fb, w3 = fa * fb;
     const s = a => (q0 === a ? w0 : 0) + (q1 === a ? w1 : 0) + (q2 === a ? w2 : 0) + (q3 === a ? w3 : 0);
     let t = q0, best = s(q0), z; if ((z = s(q1)) > best) { best = z; t = q1; } if ((z = s(q2)) > best) { best = z; t = q2; } if ((z = s(q3)) > best) t = q3; return t; };
+  /* smooth height (no hummock noise) for contour lines, when the elevation slider is up */
+  const EC = (plan.tune?.relief ?? 0) > 0 ? new Float32Array(fw * fh) : null;
+  if (EC) for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) { const p = plan.W(i, j); EC[j * fw + i] = plan.elevAt(p.x, p.y); }
   /* slope shading per foot, sampled per pixel */
   const SL = new Float32Array(fw * fh); for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) SL[j * fw + i] = (bil(EF, i - 1.5, j) - bil(EF, i + 1.5, j) + bil(EF, i, j - 1.5) - bil(EF, i, j + 1.5)) * .8;
-  const ox = plan.x0 * FT_PER_MI, oy = plan.y1 * FT_PER_MI, decay = Math.max(0, plan.tune?.decay ?? 0);
+  const ox = plan.x0 * FT_PER_MI, oy = plan.y1 * FT_PER_MI, decay = Math.max(0, plan.tune?.decay ?? 0), rel = Math.max(0, plan.tune?.relief ?? 0);
   /* overall flow direction of the water, for streaks */
   let fa = 0; { const wl = plan.lines.find(l => l.kind === "creek" || l.kind === "river"); if (wl && wl.pts.length > 1) { const a = wl.pts[0], b = wl.pts[wl.pts.length - 1]; fa = Math.atan2(b.v - a.v, b.u - a.u); } }
   const ca = Math.cos(fa), sa = Math.sin(fa);
@@ -354,7 +359,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
         /* decay: grass and moss go grey-brown in patches */
         if (decay > 0 && t !== T.snow && t !== T.crag) col = mixc(col, mixc([134, 122, 88], [100, 92, 72], n2), decay * (.4 + .5 * sm(.3, .7, tbl(gx * .6 + 3, gy * .6 + 8))));
         const sl = bil(SL, u, v);
-        let relief = 6, dAdd = 0;
+        let relief = 6 * (1 + rel * 1.5), dAdd = 0;
         /* wind-packed snow: low ripples across the wind (from the north-west), blue-grey in the hollows, drifts, a little sparkle */
         if (t === T.snow) {
           /* (the noise table makes features about 23 units across, so an argument of gx * 23 / F gives features F feet wide) */
@@ -378,6 +383,11 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
           if (fis < .3) col = mixc(col, [48, 46, 44], (.3 - fis) / .3 * .8);
           col = mixc(col, [150, 156, 112], sm(.66, .72, tbl(gx * 9 + 31, gy * 9 + 8)) * .35);   /* lichen ~2.5 ft */
           relief = 12;
+        }
+        if (EC) {   /* contour lines every 5 ft, darker every 25 ft, drawn a constant width whatever the slope */
+          const e = bil(EC, u, v), ge = Math.hypot(bil(EC, u + .5, v) - bil(EC, u - .5, v), bil(EC, u, v + .5) - bil(EC, u, v - .5)) + 1e-4;
+          const c5 = e / 5, dist = Math.abs(c5 - Math.round(c5)) * 5 / ge, idx = Math.round(c5) % 5 === 0, wFt = idx ? .2 : .13;
+          if (dist < wFt) dAdd -= (idx ? 34 : 20) * rel * (1 - dist / wFt);
         }
         let d = (n3 - .5) * 10 + (ihash(gx * 10, gy * 10) - .5) * 7 + sl * relief + dAdd;
         const wa = bil(WF, u, v), rd = bil(RF, u, v);

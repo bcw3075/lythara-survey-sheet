@@ -413,6 +413,8 @@ function setPicking(on) {
 
 /* ---------- placing an encounter map by clicking a spot on a sheet or the World Map ---------- */
 let encHandler = null;
+const TUNE_LABELS = [["trees", "Tree cover", "clearing", "dense"], ["brush", "Undergrowth", "open", "thick"], ["rocks", "Rocks", "none", "boulder field"],
+  ["water", "Water", "narrower", "wider"], ["relief", "Elevation", "flat", "hilly"], ["decay", "Decay", "healthy", "blighted"]];
 /** The world point (miles) under a click on a sheet or the World Map, or null on any other scene. */
 function worldPointAt(scene, p) {
   if (scene?.getFlag(ID, "state")?.frame) return toMiles(scene, p.x, p.y);
@@ -428,6 +430,8 @@ async function askEncounter(scene, w) {
       <div class="form-group"><label>Squares across</label><input type="number" name="cols" value="40" min="10" max="${ENC_MAX}" step="1"></div>
       <div class="form-group"><label>Squares down</label><input type="number" name="rows" value="40" min="10" max="${ENC_MAX}" step="1"></div>
       <div class="form-group"><label>Put the party there</label><input type="checkbox" name="party"></div>
+      <fieldset><legend>Tune the spot (middle = the land as it is)</legend>${TUNE_LABELS.map(([k, label, lo, hi]) =>
+        `<div class="form-group"><label>${label}</label><span class="hint">${lo}</span><input type="range" name="tune_${k}" min="-100" max="100" step="10" value="0" style="flex:2"><span class="hint">${hi}</span></div>`).join("")}</fieldset>
       <p class="hint">Leave the party unticked to plan ahead. The map opens for you only; players don't see it until you activate it.</p>` }).catch(() => null);
 }
 function setEncPlacing(on) {
@@ -440,7 +444,8 @@ function setEncPlacing(on) {
     const opts = await askEncounter(scene, w); if (!opts) return;
     busy = true; const note = ui.notifications.info("Drawing the encounter map… about 15 seconds.", { permanent: true });
     try {
-      const r = await createEncounter({ x: w.x, y: w.y, from: scene.id, name: opts.name, cols: opts.cols, rows: opts.rows, party: !!opts.party, view: true });
+      const tune = Object.fromEntries(TUNE_LABELS.map(([k]) => [k, (Number(opts[`tune_${k}`]) || 0) / 100]));
+      const r = await createEncounter({ x: w.x, y: w.y, from: scene.id, name: opts.name, cols: opts.cols, rows: opts.rows, party: !!opts.party, view: true, tune });
       ui.notifications.info(`Made ${r.name}: ${r.cols}×${r.rows} squares${r.members ? `, party placed` : ""}. It's in the Encounter Maps folder.`);
       ui.controls.activate({ control: CONTROL, tool: "select" });
     } catch (e) { ui.notifications.error(e.message); console.error(e); }
