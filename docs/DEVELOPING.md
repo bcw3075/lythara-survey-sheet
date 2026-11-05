@@ -74,7 +74,7 @@ Picked hexes plus a 3-mile margin, at 150 px per mile, capped near 16,000 px (We
 - **In Foundry, after installing:** use the real buttons and clicks. Check as GM and as a player in a second tab, run an ordinary build as a regression test, and check land parity after land changes.
 
 ## Releasing
-Bump `version` in `module.json`, then rebuild `dist/lythara-survey-sheet.zip`; the manifest downloads this committed zip:
+First bring this file up to date with the change: run `python3 tools/doccheck.py` (it lists names this file mentions that are no longer in the code) and reread the sections the change touched. Then bump `version` in `module.json` and rebuild `dist/lythara-survey-sheet.zip`; the manifest downloads this committed zip:
 
 ```sh
 rm dist/lythara-survey-sheet.zip && zip -qr dist/lythara-survey-sheet.zip module.json styles scripts icons
