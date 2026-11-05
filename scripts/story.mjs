@@ -9,7 +9,7 @@ export const STORY_GROUND = ["#c6b670", "#b0ac62", "#747c44", "#48522e", "#8a965
 export const STYLE = { hills: "contours", water: "depth", peaks: "none" };
 /* hills also: "contours" (hillshade + contour lines every 100 ft, labelled every 500 ft, on open and rough ground) | "tinted" (contours plus colour by height on rough ground).
    peaks also: "none". water also: "ripples" (shore lines echoing out), "depth" (bands darkening offshore), "hatch" (ink hatching along the shore), "paper" (bare paper with an inked edge and ripples).
-   Elevation is invented but fixed: 2,400 ft at the highest point a sheet can reach; contour values read from that. */
+   Heights are real feet above the sea (HEIGHTS in land.mjs); contour values read from them. */
 const STORY_HOLLOW = .41, STORY_RIDGE = .64;
 export function makeStory(land) {
   const { tAt, elevAt, riseAt, reliefAt } = land, creekPts = land.waterPoints, seed = land.s, GW = land.gw, GH = land.gh, i0 = land.i0, j1 = land.j1;

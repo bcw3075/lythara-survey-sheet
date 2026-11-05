@@ -326,7 +326,7 @@ export async function renderSheet(scene, { force = false } = {}) {
     map = { fingerprint: R.fingerprint, bytes: blob.size, rev, slot };
   }
   const pins = await syncPins(scene, w.pins.filter(p => inFrame(st.frame, p)));
-  await scene.setFlag(ID, "state", { ...st, renderKey: key, rev: map.rev ?? st.rev, slot: map.slot ?? st.slot, fingerprint: map.fingerprint, slice: slice.data, sliceBox: { x0: slice.x0, y1: slice.y1, w: slice.w, h: slice.h } });
+  await scene.setFlag(ID, "state", { ...st, renderKey: key, rev: map.rev ?? st.rev, slot: map.slot ?? st.slot, fingerprint: map.fingerprint, slice: slice.data, sliceSea: slice.sea ?? null, sliceMass: slice.mass ?? null, sliceBox: { x0: slice.x0, y1: slice.y1, w: slice.w, h: slice.h } });
   if (canvas.scene?.id === scene.id) queueLayout();
   return { map, pins };
 }
@@ -391,7 +391,7 @@ export function exportSheet(sceneArg) {
   if (!scene) throw new Error("No sheet exists yet.");
   const st = scene.getFlag(ID, "state"), w = world();
   const meta = survey(), hexR = meta ? +(new foundry.grid.HexagonalGrid(meta.grid).sizeY / 2 / meta.pxPerMile).toFixed(4) : undefined;
-  return { ok: true, scene: scene.id, name: scene.name, frame: st.frame, hexes: st.hexes, hexR, slice: { ...st.sliceBox, data: st.slice }, seed: w.seed, paint: w.paint, lines: w.lines, pins: w.pins, rev: st.rev, fingerprint: st.fingerprint };
+  return { ok: true, scene: scene.id, name: scene.name, frame: st.frame, hexes: st.hexes, hexR, slice: { ...st.sliceBox, data: st.slice, ...(st.sliceSea && st.sliceMass ? { sea: st.sliceSea, mass: st.sliceMass } : {}) }, seed: w.seed, paint: w.paint, lines: w.lines, pins: w.pins, rev: st.rev, fingerprint: st.fingerprint };
 }
 
 /* ---------- picking hexes on the World Map ---------- */

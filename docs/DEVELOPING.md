@@ -25,7 +25,7 @@ The first five files are pure so they run in a plain browser: generation and dra
 
 ## Data the module stores
 - World settings: `world` (seed, origin, pins, lines, paint), `survey` (survey metadata; the survey itself is a PNG in `assets/map-tools/`), `explored` (exploration store), `heading` (party's last travel direction, unit vector), `sheetNav`.
-- Scene flags (`flags["lythara-survey-sheet"]`): `state` (sheets: frame, hexes, slice, render key, fingerprint), `encounter` (encounter maps: centre, size, source scene, sliders, features, notes, crown mask `cover`), `gate` (edge gate regions).
+- Scene flags (`flags["lythara-survey-sheet"]`): `state` (sheets: frame, hexes, the survey slice with its height fields `sliceSea`/`sliceMass`, render key, fingerprint; `exportSheet` sends all three so the companion page gets real heights — a sheet saved before 0.11.3 gets them on its next refresh), `encounter` (encounter maps: centre, size, source scene, sliders, features, notes, crown mask `cover`), `gate` (edge gate regions).
 - Every document the module creates carries a module flag (e.g. `enc`), so a rebuild deletes only the module's own documents, never the GM's.
 
 ## Heights and climate
