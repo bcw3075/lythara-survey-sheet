@@ -80,7 +80,7 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40 }) {
   /* trees: one chance per 18-ft square of the world */
   lattice(18, 501, (wx, wy, u, v, r3, r4) => {
     const t = terrainAt(wx, wy);
-    const p = t === T.old ? .8 : t === T.woods ? .86 : t === T.damp ? .5 : t === T.rough ? .035 : t === T.hills ? .05 : t === T.fields ? .006 : 0;
+    const p = t === T.old ? .72 : t === T.woods ? .78 : t === T.damp ? .5 : t === T.rough ? .035 : t === T.hills ? .05 : t === T.fields ? .006 : 0;
     if (r3 >= p) return;
     let sp = story.speciesAt(wx, wy, t);
     for (let k = 1; !sp && forest(t) && k < 6; k++) sp = story.speciesAt(wx + k * .004, wy - k * .003, t);
@@ -292,15 +292,16 @@ const ihash = (x, y) => { let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0,
 const sm = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 /* Colours measured from 60-odd straight-down summer drone photos of temperate woods, meadows and creeks (Unsplash, Nov 2026):
    canopy luminance percentiles 5/20/40/60/80/95 for broadleaf and conifer stands; meadow grass about 95,124,52; water under trees 63,87,67. */
-const RAMP_BROAD = [[18, 26, 19], [29, 45, 28], [49, 73, 37], [76, 103, 48], [110, 139, 68], [164, 189, 96]];
-const RAMP_CONIFER = [[6, 15, 8], [13, 23, 14], [23, 35, 21], [36, 51, 30], [58, 75, 43], [93, 117, 70]];
+/* battle-map finish: the measured ramp lifted out of black and a little more saturated */
+const RAMP_BROAD = [[30, 50, 30], [42, 70, 36], [64, 98, 42], [94, 130, 52], [134, 166, 70], [188, 210, 106]];
+const RAMP_CONIFER = [[18, 38, 30], [26, 54, 38], [38, 72, 46], [54, 94, 56], [80, 122, 68], [122, 156, 90]];
 const ramp = (R, t) => { t = Math.max(0, Math.min(.9999, t)) * (R.length - 1); const i = Math.floor(t), f = t - i; return mixc(R[i], R[i + 1], f); };
 const REAL = {
-  [T.fields]: [[86, 116, 46], [118, 134, 60]], [T.rough]: [[92, 114, 50], [128, 132, 68]], [T.woods]: [[88, 72, 44], [66, 80, 38]], [T.old]: [[66, 54, 34], [50, 64, 32]],
+  [T.fields]: [[98, 134, 56], [128, 150, 70]], [T.rough]: [[104, 130, 58], [138, 146, 76]], [T.woods]: [[84, 82, 48], [72, 92, 46]], [T.old]: [[70, 68, 40], [60, 80, 40]],
   [T.damp]: [[80, 98, 54], [112, 116, 70]], [T.hills]: [[136, 126, 88], [116, 120, 68]], [T.bad]: [[96, 88, 82], [80, 74, 70]], [T.crag]: [[138, 134, 126], [112, 110, 104]], [T.snow]: [[232, 234, 236], [214, 220, 226]]
 };
-const GRASS = ["rgba(74,92,36,.55)", "rgba(98,118,46,.55)", "rgba(128,140,62,.5)", "rgba(170,160,92,.5)", "rgba(150,132,74,.45)", "rgba(112,124,58,.5)"];
-const LITTER = ["rgba(150,96,42,.55)", "rgba(176,128,52,.5)", "rgba(122,78,40,.55)", "rgba(196,158,72,.45)", "rgba(98,72,44,.5)"];
+const GRASS = ["rgba(70,100,38,.42)", "rgba(92,124,46,.4)", "rgba(126,152,64,.38)", "rgba(160,170,92,.32)", "rgba(84,112,44,.4)", "rgba(112,140,58,.38)"];
+const LITTER = ["rgba(150,104,52,.28)", "rgba(170,132,62,.24)", "rgba(122,90,48,.28)", "rgba(190,160,84,.2)", "rgba(98,80,50,.26)"];
 
 export function drawReal(plan, pxSq = 100, layers = "all") {
   const ppf = pxSq / SQ_FT, w = Math.round(plan.Wft * ppf), h = Math.round(plan.Hft * ppf);
@@ -323,26 +324,26 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
       for (let px = 0; px < w; px++) {
         const u = px / ppf, t = tAt(u, v), gx = ox + u, gy = oy - v;
         const pal = REAL[t] ?? REAL[T.rough], nA = tbl(gx / 16, gy / 16), nB = tbl(gx / 5 + 11, gy / 5 + 29), n2 = tbl(gx / 2.3 + 40, gy / 2.3 + 17), n3 = tbl(gx / .7 + 9, gy / .7 + 3);
-        let col = mixc(pal[0], pal[1], sm(.3, .7, nA * .65 + nB * .35));
+        let col = mixc(pal[0], pal[1], sm(.2, .8, nA * .45 + nB * .55));
         /* bare earth showing through grass */
-        if (t === T.fields || t === T.rough || t === T.hills) { const dd = tbl(gx / 4.5 + 3, gy / 4.5 + 7) * .6 + n2 * .4; col = mixc(col, [122, 100, 66], sm(.62, .74, dd) * .75);
-          col = mixc(col, [86, 104, 44], sm(.5, .72, tbl(gx / 2.2 + 31, gy / 2.2 + 13)) * .45); }
+        if (t === T.fields || t === T.rough || t === T.hills) { const dd = tbl(gx / 4.5 + 3, gy / 4.5 + 7) * .6 + n2 * .4; col = mixc(col, [132, 116, 76], sm(.66, .76, dd) * .5);
+          col = mixc(col, [86, 116, 46], sm(.5, .72, tbl(gx / 2.2 + 31, gy / 2.2 + 13)) * .3); }
         /* moss on the forest floor */
         if (t === T.woods || t === T.old) col = mixc(col, [58, 78, 34], sm(.55, .7, tbl(gx / 7 + 5, gy / 7 + 2)) * .7);
-        const sl = (bil(EF, u - 1.5, v) - bil(EF, u + 1.5, v) + bil(EF, u, v - 1.5) - bil(EF, u, v + 1.5)) * 1.4;
-        let d = (n3 - .5) * 14 + (ihash(gx * 10, gy * 10) - .5) * 18 + sl * 6;
+        const sl = (bil(EF, u - 1.5, v) - bil(EF, u + 1.5, v) + bil(EF, u, v - 1.5) - bil(EF, u, v + 1.5)) * .8;
+        let d = (n3 - .5) * 10 + (ihash(gx * 10, gy * 10) - .5) * 7 + sl * 6;
         const wa = bil(WF, u, v), rd = bil(RF, u, v);
         if (rd < 6.5) { const e = sm(6.5, 4.8, rd); col = mixc(col, mixc([138, 116, 82], [118, 98, 70], n2), e); if (Math.abs(rd - 2.6) < .7) d -= 18 * e; if (ihash(gx * 4, gy * 4) > .93) d += 24 * e; }
         if (wa > -.55 && wa <= 0) { /* wet mud and pebbles on the banks */
-          const m = sm(-.55, -.1, wa); col = mixc(col, mixc([104, 88, 62], [82, 70, 52], m), m * .9);
+          const m = sm(-.55, -.1, wa); col = mixc(col, mixc([120, 104, 74], [86, 72, 54], m), m * .9); if (wa > -.06) d -= 26;
         }
         if (wa > 0) {
           const along = gx * ca - gy * sa, across = gx * sa + gy * ca, z = Math.min(1, wa);
-          col = mixc([104, 96, 70], [63, 87, 72], sm(0, .35, z)); col = mixc(col, [34, 52, 48], sm(.35, .9, z));
+          col = mixc([110, 150, 136], [62, 112, 112], sm(0, .4, z)); col = mixc(col, [40, 74, 80], sm(.4, .95, z));
           const st1 = tbl(along / 9, across / .7), st2 = tbl(along / 3 + 7, across / .4 + 3);
           d = (st1 - .5) * 16 + (st2 - .5) * 10 + (1 - z) * 6;
           if (st1 > .74) d += (st1 - .74) * 80 * (1 - z * .5);
-          if (z < .1) d += (n3 > .5 ? 40 : 20) * (1 - z / .1);
+          if (z < .06) d += 34 * (1 - z / .06);
         }
         buf[py * w + px] = (255 << 24 | (Math.max(0, Math.min(255, col[2] + d)) << 16) | (Math.max(0, Math.min(255, col[1] + d)) << 8) | Math.max(0, Math.min(255, col[0] + d))) >>> 0;
       }
@@ -356,7 +357,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
       const u0 = gx * 1.1 - ox, v0 = oy - gy * 1.1; if (u0 < -1 || v0 < -1 || u0 > plan.Wft + 1 || v0 > plan.Hft + 1) continue;
       const t = tAt(u0, v0), wa = bil(WF, u0, v0), rd = bil(RF, u0, v0); if (wa > -.3 || rd < 5) continue;
       if (t === T.fields || t === T.rough || t === T.hills || t === T.damp) {
-        const dens = t === T.hills ? 3 : t === T.fields ? 6 : 7;
+        const dens = t === T.hills ? 2 : t === T.fields ? 3 : 4;
         for (let n = 0; n < dens; n++) { const r1 = hash(gx, gy, s + 1000 + n), r2 = hash(gx, gy, s + 1010 + n), r3 = hash(gx, gy, s + 1020 + n);
           const x = (u0 + r1 * 1.1) * ppf, y = (v0 + r2 * 1.1) * ppf, L = (.6 + r3 * 1.0) * ppf, an = -1.9 + (r3 - .5) * 1.1 + (r1 - .5) * .5, p = gB[(r2 * GRASS.length) | 0];
           p.moveTo(x, y); p.quadraticCurveTo(x + Math.cos(an) * L * .5 + L * .15, y + Math.sin(an) * L * .5, x + Math.cos(an) * L, y + Math.sin(an) * L); }
@@ -391,8 +392,8 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
     /* deadfall */
     for (const g of plan.feats.logs) realLog(c, g.u * ppf, g.v * ppf, g.len * ppf, g.w * ppf, g.ang, g.u * 7 + g.v);
     /* tree shadows: crisp, long, in the crown's outline, falling south-east (sun high in the north-west) */
-    c.save(); c.globalCompositeOperation = "multiply"; c.fillStyle = "rgb(118,124,138)"; c.filter = `blur(${Math.max(1, ppf * .35)}px)`;
-    for (const t of plan.feats.trees) { const R = t.R * ppf * .95, x = t.u * ppf + R * .72, y = t.v * ppf + R * .82; c.beginPath(); for (const f of florets(t)) { c.moveTo(x + f.x * R + f.r * R, y + f.y * R); c.arc(x + f.x * R, y + f.y * R, f.r * R, 0, 7); } c.fill(); }
+    c.save(); c.globalCompositeOperation = "multiply"; c.fillStyle = "rgb(138,144,156)";
+    for (const t of plan.feats.trees) { const R = t.R * ppf * .97, x = t.u * ppf + R * .36, y = t.v * ppf + R * .42; c.filter = `blur(${Math.max(1, R * .1)}px)`; c.beginPath(); for (const f of florets(t)) { c.moveTo(x + f.x * R + f.r * R, y + f.y * R); c.arc(x + f.x * R, y + f.y * R, f.r * R, 0, 7); } c.fill(); }
     c.restore();
     /* trunks and root flare, seen when the canopy above fades */
     for (const t of plan.feats.trees) { const x = t.u * ppf, y = t.v * ppf, r = Math.max(t.trunk, .5) * ppf;
@@ -407,7 +408,7 @@ export function drawReal(plan, pxSq = 100, layers = "all") {
     for (const t of trees) {
       const x = t.u * ppf, y = t.v * ppf, R = t.R * ppf, col = hex(t.col);
       if (t.kind === "pine" || t.kind === "hemlock") realConifer(c, x, y, R, col, t.seed, ppf);
-      else { realCanopy(c, x, y, R, col, t.seed, ppf, 1, t.kind); if (t.kind === "willow") willowStrands(c, x, y, R, col, t.seed, ppf); }
+      else { realCanopy(c, x, y, R, col, t.seed, ppf, 1, t.kind); }
     }
   }
   if (layers === "all") { c.strokeStyle = "rgba(20,20,10,.09)"; c.lineWidth = Math.max(1, pxSq / 70); c.beginPath(); for (let i = 0; i <= plan.cols; i++) { c.moveTo(i * pxSq + .5, 0); c.lineTo(i * pxSq + .5, h); } for (let j = 0; j <= plan.rows; j++) { c.moveTo(0, j * pxSq + .5); c.lineTo(w, j * pxSq + .5); } c.stroke(); }
@@ -425,32 +426,36 @@ function florets(t) {
   for (let i = 1; i < n; i++) { const a = r_() * 6.283, d = .3 + r_() * .36; out.push({ x: Math.cos(a) * d, y: Math.sin(a) * d * (.85 + r_() * .15), r: .26 + r_() * .16, h: 1 - d * .55 }); }
   return out;
 }
+/* a circle with a leafy, bumpy edge */
+function bumpy(c, x, y, r, r_, n = 11, amp = .14) { const ph = r_() * 6.283, a2 = r_() * 6.283; c.moveTo(x + r, y);
+  for (let k = 0; k <= 40; k++) { const a = k / 40 * 6.283, rr = r * (1 + amp * (.6 * Math.cos(n * a + ph) + .4 * Math.cos((n + 3) * a + a2))); k ? c.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr) : c.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); } c.closePath(); }
 function realCanopy(c, x, y, R, col, seed, ppf, scale, kind) {
   const r_ = rng(Math.round(seed * 9973) + 17), Rft = R / ppf;
-  /* each tree its own tint: yellow-green to blue-green, lighter or darker */
-  const tint = (kind === "birch" || kind === "beech" || kind === "beechS" || kind === "willow" ? .35 : kind === "dark" ? -.3 : 0) + (r_() - .5) * .7, val = (kind === "dark" ? .82 : 1) * (.86 + r_() * .28);
-  const tone = c3 => [Math.min(255, (c3[0] + tint * 14) * val), Math.min(255, (c3[1] + tint * 6) * val), Math.min(255, (c3[2] - tint * 12) * val)];
-  const F = florets({ R: Rft, seed }), sun = [-.52, -.56, .64];
-  /* the dark body: crevices and the shaded underside show through between florets */
-  c.fillStyle = `rgb(${tone(RAMP_BROAD[0]).map(v => v | 0)})`; c.beginPath();
-  for (const f of F) { c.moveTo(x + f.x * R + f.r * R * 1.02, y + f.y * R); c.arc(x + f.x * R, y + f.y * R, f.r * R * 1.02, 0, 7); } c.fill();
-  /* leaf dabs, floret by floret (lowest florets first), each floret a small dome */
-  const leaf = Math.max(.3, Math.min(.55, Rft * .04));
-  for (const f of F.slice().sort((a, b) => a.h - b.h)) {
-    const fr = f.r * R, n = Math.round((20 + 2.4 * (f.r * Rft / leaf) ** 2) * scale), dabs = [];
-    for (let i = 0; i < n; i++) {
-      const a = r_() * 6.283, d = Math.pow(r_(), .62) * .98, nz = Math.sqrt(Math.max(0, 1 - d * d)), nx = Math.cos(a) * d, ny = Math.sin(a) * d;
-      const L = Math.max(0, nx * sun[0] + ny * sun[1] + nz * sun[2]), crown = -(f.x + f.y) * .12;
-      const t = Math.max(0, Math.min(1, .06 + L * .82 * (.7 + .3 * f.h) + crown + (r_() - .5) * .14 - (d > .86 ? .18 : 0)));
-      dabs.push({ px: x + f.x * R + nx * fr, py: y + f.y * R + ny * fr, nz, t, r: (.7 + r_() * .9) * leaf * ppf, rot: r_() * 3.14 });
-    }
-    dabs.sort((p, q) => p.nz - q.nz);
-    for (const p of dabs) { const cc = tone(ramp(RAMP_BROAD, p.t)); c.fillStyle = `rgb(${cc[0] | 0},${cc[1] | 0},${cc[2] | 0})`; c.beginPath(); c.ellipse(p.px, p.py, Math.max(1.2, p.r * 1.25), Math.max(1, p.r * .8), p.rot, 0, 7); c.fill(); }
+  const tint = (kind === "birch" || kind === "beech" || kind === "beechS" || kind === "willow" ? .4 : kind === "dark" ? -.35 : kind === "brush" ? -.15 : 0) + (r_() - .5) * .6, val = (kind === "dark" ? .9 : 1) * (.9 + r_() * .2);
+  const tone = t => { const c3 = ramp(RAMP_BROAD, t); return `rgb(${Math.min(255, (c3[0] + tint * 16) * val) | 0},${Math.min(255, (c3[1] + tint * 6) * val) | 0},${Math.min(255, (c3[2] - tint * 12) * val) | 0})`; };
+  const F = florets({ R: Rft, seed }), lw = Math.max(1.4, ppf * .14);
+  /* silhouette: a dark rim, then the shaded body; overlapping strokes are covered so only the outer edge shows */
+  const shapes = F.map(f => ({ f, s: r_() * 1e6 }));
+  c.lineJoin = "round"; c.strokeStyle = tone(-.1); c.lineWidth = lw * 2; c.beginPath(); for (const { f, s } of shapes) bumpy(c, x + f.x * R, y + f.y * R, f.r * R * 1.04, rng(s)); c.stroke();
+  c.fillStyle = tone(.05); c.beginPath(); for (const { f, s } of shapes) bumpy(c, x + f.x * R, y + f.y * R, f.r * R * 1.04, rng(s)); c.fill();
+  /* each floret in three clean tones, lowest first, then a leaf texture on top */
+  const leaf = Math.max(.3, Math.min(.5, Rft * .035));
+  for (const { f } of shapes.slice().sort((a, b) => a.f.h - b.f.h)) {
+    const fx = x + f.x * R, fy = y + f.y * R, fr = f.r * R, lift = (f.h - .7) * .25 - (f.x + f.y) * .08;
+    c.fillStyle = tone(.32 + lift); c.beginPath(); bumpy(c, fx, fy, fr * .96, r_, 9, .12); c.fill();
+    c.fillStyle = tone(.58 + lift); c.beginPath(); bumpy(c, fx - fr * .17, fy - fr * .19, fr * .68, r_, 8, .16); c.fill();
+    c.fillStyle = tone(.82 + lift); c.beginPath(); bumpy(c, fx - fr * .3, fy - fr * .33, fr * .34, r_, 7, .2); c.fill();
+    /* leaves: small stamps tinted by where they sit on the floret, plus a few dark gaps on the shaded side */
+    const n = Math.round((10 + 1.1 * (f.r * Rft / leaf) ** 2) * scale);
+    for (let i = 0; i < n; i++) { const a = r_() * 6.283, d = Math.sqrt(r_()) * .92, lx = Math.cos(a) * d, ly = Math.sin(a) * d, lit = Math.max(0, -(lx + ly) * .45 + .5 - d * .3);
+      const px = fx + lx * fr, py = fy + ly * fr, rr = (.6 + r_() * .7) * leaf * ppf;
+      if (lit < .25 && r_() < .35) { c.fillStyle = tone(.05); } else c.fillStyle = tone(.25 + lit * .7 + lift + (r_() - .5) * .12);
+      c.globalAlpha = .8; c.beginPath(); c.ellipse(px, py, rr * 1.2, rr * .75, r_() * 3.14, 0, 7); c.fill(); c.globalAlpha = 1; }
   }
 }
 function realConifer(c, x, y, R, col, seed, ppf) {
   const key = Math.round(seed * 97) | 0, r_ = rng(Math.round(seed * 9973) + 29), tilt = r_() * 6.283; col = liftDark(col);
-  c.fillStyle = `rgb(${RAMP_CONIFER[0]})`; c.beginPath(); c.arc(x, y, R * .82, 0, 7); c.fill();
+  c.fillStyle = `rgb(${RAMP_CONIFER[0]})`; c.beginPath(); for (let k = 0; k <= 36; k++) { const a = k / 36 * 6.283, rr = R * (k % 2 ? .74 : .84); k ? c.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr) : c.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); } c.closePath(); c.fill();
   for (let layer = 0; layer < 3; layer++) {
     const n = 14 + layer * 3, sc = 1 - layer * .26;
     for (let i = 0; i < n; i++) {
