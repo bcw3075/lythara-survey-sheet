@@ -2,7 +2,7 @@ import { PPM, renderMap } from "./render.mjs";
 import { CELL, lineCourse, T as TERRAIN } from "./land.mjs";
 import { classifyImage, surveyToPng, surveyFromPng, surveySlice, SURVEY_FILE, SURVEY_VERSION } from "./survey.mjs";
 import { harvestScene, restoreScene, growExplored, syncExploration, exploredArea } from "./explore.mjs";
-import { planEncounter, drawEncounter, parseNotes, FT_PER_MI, SQ_FT } from "./encounter.mjs";
+import { planEncounter, drawEncounter, parseNotes, squareCosts, readPlan, TRUNK_THIN, TRUNK_THICK, FT_PER_MI, SQ_FT } from "./encounter.mjs";
 
 const ID = "lythara-survey-sheet";
 const IMAGE_DIR = "assets/map-tools";
@@ -700,7 +700,7 @@ for (const hook of ["canvasReady", "canvasPan", "drawNote", "refreshNote", "crea
    undergrowth) is the level's background; tree crowns are one overhead tile that fades when a token walks beneath;
    thick trunks are short walls; undergrowth and water are PF2e difficult terrain. The map remembers where in the world
    it sits, so it can grow at an edge and the party can go back to the same spot on the sheet afterwards. */
-const ENC_FOLDER = "Encounter Maps", ENC_PX = 100, ENC_MAX = 120, CANOPY_ELEV = 20, TRUNK_THIN = .75, TRUNK_THICK = 1.6;
+const ENC_FOLDER = "Encounter Maps", ENC_PX = 100, ENC_MAX = 120, CANOPY_ELEV = 20, READ_SCHEMA = 1;
 const encFolder = async () => game.folders.find(f => f.type === "Scene" && f.name === ENC_FOLDER) ?? Folder.create({ name: ENC_FOLDER, type: "Scene" });
 async function uploadCanvas(cv, name) {
   const blob = await new Promise(res => cv.toBlob(res, "image/webp", 0.86));
@@ -714,26 +714,6 @@ async function uploadCanvas(cv, name) {
 async function encounterInput(cx, cy, cols, rows) {
   const w = world(), { meta, data } = await loadSurvey(), m = Math.max(cols, rows) * SQ_FT / FT_PER_MI / 2 + 1.5;
   return { seed: w.seed, slice: surveySlice(data, meta, { x0: cx - m, x1: cx + m, y0: cy - m, y1: cy + m }), paint: w.paint, lines: w.lines, pins: w.pins };
-}
-/* each 5-ft square: 0 plain, 1 difficult (undergrowth or shallow water), 2 greater difficult (deep water: the middle of a river or wide creek; a
-   narrow creek is shallow throughout); 25 samples a square */
-function squareCosts(plan) {
-  const { cols, rows } = plan, out = new Uint8Array(cols * rows), B = plan.feats.brush;
-  /* climbing over: a fallen giant (its whole length) and big boulders */
-  const logs = plan.feats.fallen ?? [], bigRocks = plan.feats.rocks.filter(r => r.big && r.r >= 2.5);
-  const over = (u, v) => logs.some(g => { const ca = Math.cos(g.ang), sa = Math.sin(g.ang), du = u - g.u, dv = v - g.v, al = du * ca + dv * sa, ac = -du * sa + dv * ca; return Math.abs(al) < g.len / 2 && Math.abs(ac) < g.w / 2 + .5; })
-    || bigRocks.some(r => (r.u - u) ** 2 + (r.v - v) ** 2 < r.r * r.r);
-  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
-    const near = B.filter(b => Math.abs(b.u - (i * SQ_FT + 2.5)) < b.r + 3 && Math.abs(b.v - (j * SQ_FT + 2.5)) < b.r + 3);
-    let wet = 0, deep = 0, brush = 0;
-    const go = plan.goingAt ? [[1, 1], [3.5, 1], [1, 3.5], [3.5, 3.5], [2.5, 2.5]].reduce((a, [a1, b1]) => a + plan.goingAt(i * SQ_FT + a1, j * SQ_FT + b1).g, 0) / 5 : 0;   /* drifts, mud, scree */
-    for (let a = 0; a < SQ_FT; a++) for (let b = 0; b < SQ_FT; b++) {
-      const u = i * SQ_FT + a + .5, v = j * SQ_FT + b + .5, wa = plan.waterAt(u, v);
-      if (wa > 0) { wet++; if (wa > .7) deep++; } else if (over(u, v) || near.some(q => (q.u - u) ** 2 + (q.v - v) ** 2 < q.r * q.r * .8)) brush++;
-    }
-    out[j * cols + i] = deep >= 20 ? 2 : wet >= 13 || brush + wet >= 12 || go > .5 ? 1 : 0;
-  }
-  return out;
 }
 /* squares of one cost as rectangles: runs along each row, merged down while the run below matches */
 function costRects(costs, cols, rows, want) {
@@ -788,8 +768,9 @@ Hooks.on("updateWorldTime", () => { if (isActiveGM()) syncEncounterDarkness().ca
     canvas, and a region created while a client's region layer is torn down gets drawn twice, once by the create and once by the
     redraw. The first copy belongs to nothing and core never removes it (see "Foundry v14 behaviour" in docs/DEVELOPING.md). So
     every document change comes first, and the one update that causes the redraw comes last.
-    grow (from extendEncounter): { state: new position and size, dims: the scene rectangle after the resize, shift: moves what the GM placed }. */
-async function drawEncounterScene(scene, { grow = null } = {}) {
+    grow (from extendEncounter): { state: new position and size, dims: the scene rectangle after the resize, shift: moves what the GM placed }.
+    reason ("build", "redraw" or "extend") goes out with the encounterDrawn hook. */
+async function drawEncounterScene(scene, { grow = null, reason = "redraw" } = {}) {
   const st = { ...scene.getFlag(ID, "encounter"), ...grow?.state }, { cx, cy, cols, rows, tune } = st;
   const cal = calendarNow(), plan = planEncounter(await encounterInput(cx, cy, cols, rows), { cx, cy, cols, rows, tune, yearFrac: cal.yearFrac, features: st.features ?? [], cover: st.cover ?? null });
   const ground = drawEncounter(plan, "real", ENC_PX, "ground"), canopy = drawEncounter(plan, "real", ENC_PX, "canopy");
@@ -847,6 +828,8 @@ async function drawEncounterScene(scene, { grow = null } = {}) {
     await scene.update({ width: d.sceneWidth, height: d.sceneHeight, levels: [{ ...level.toObject(), background }] });
   }
   else await level.update({ background });
+  /* other modules' map reads are stale now. Fires on the drawing client only; other clients compare the rev in the scene flag */
+  Hooks.callAll(`${ID}.encounterDrawn`, scene, { rev, reason });
   const sea = plan.season;
   return { date: cal.label, season: { warmth: +sea.T.toFixed(2), leaf: +sea.leaf.toFixed(2), autumn: +sea.autumn.toFixed(2), snow: +sea.snow.toFixed(2) }, darkness: scene.environment?.darknessLevel, trees: plan.feats.trees.length, brush: plan.feats.brush.length, walls: walls.length, difficult: costs.filter(v => v === 1).length, deep: costs.filter(v => v === 2).length, bytes: g.bytes + c.bytes };
 }
@@ -885,7 +868,7 @@ export async function createEncounter({ x, y, cols = 40, rows = 40, name, from, 
   const scene = await Scene.create({ name, folder: (await encFolder()).id, navigation: false, width: cols * ENC_PX, height: rows * ENC_PX, padding: 0.1,
     grid: { type: CONST.GRID_TYPES.SQUARE, size: ENC_PX, distance: SQ_FT, units: "ft", alpha: 0.18 }, tokenVision: true, fog: { mode: 2 },
     environment: { globalLight: { enabled: true, darkness: { min: 0, max: .5 } } }, flags: { pf2e: { syncDarkness: "disabled" }, [ID]: { encounter: { version: 1, cx: at.x, cy: at.y, cols, rows, from: at.from ?? null, tune: tune ?? null, features, notes: String(notes ?? "").slice(0, 2000), unknown: parsed.unknown, cover } } } });
-  const drawn = await drawEncounterScene(scene);
+  const drawn = await drawEncounterScene(scene, { reason: "build" });
   const mode = placement ?? (party ? "middle" : null), members = mode ? await placeMembers(scene, mode) : 0;
   if (activate) await scene.activate(); else if (view) await scene.view();
   return { ok: true, scene: scene.id, name: scene.name, at, cols, rows, members, features: features.map(f => f.kind), unknown: parsed.unknown, ...drawn };
@@ -913,7 +896,7 @@ export async function extendEncounter(scene, side, squares = 10) {
     const movement = type === "Token" ? { movement: Object.fromEntries(docs.map(x => [x.id, { constrainOptions: { ignoreWalls: true, ignoreCost: true } }])) } : {};
     await scene.updateEmbeddedDocuments(type, ups, { animate: false, ...movement, [ID]: { [SYNC]: true } });
   } };
-  const r = await drawEncounterScene(scene, { grow: { state: { cx: +cx.toFixed(5), cy: +cy.toFixed(5), cols, rows }, dims, shift,
+  const r = await drawEncounterScene(scene, { reason: "extend", grow: { state: { cx: +cx.toFixed(5), cy: +cy.toFixed(5), cols, rows }, dims, shift,
     fog: { from: { width: before.sceneWidth, height: before.sceneHeight }, to: { width, height }, at: { x: side === "west" ? n * ENC_PX : 0, y: side === "north" ? n * ENC_PX : 0 } } } });
   return { side, squares: n, cols, rows, shifted: [dx, dy], ...r };
 }
@@ -939,20 +922,40 @@ export async function returnFromEncounter(scene, { activate = true, removeTokens
   if (activate) await (sheet ?? map).activate();
   return { at: { x: +w.x.toFixed(3), y: +w.y.toFixed(3) }, to: (sheet ?? map).name, removed: removeTokens ? toks.length : 0 };
 }
+/* the square a party arriving at this map starts from: on the edge they came in by, from the last heading; south if unknown */
+function entrySquare(st, hd) {
+  let ex = hd ? -hd.x : 0, ey = hd ? hd.y : 1;   /* scene y runs south; they came from behind their heading */
+  const n = Math.hypot(ex, ey) || 1; ex /= n; ey /= n;
+  const k = Math.min(Math.abs(ex) > 1e-3 ? (st.cols / 2 - 3) / Math.abs(ex) : 1e9, Math.abs(ey) > 1e-3 ? (st.rows / 2 - 3) / Math.abs(ey) : 1e9);
+  return { ci: Math.round(Math.floor(st.cols / 2) + ex * k), cj: Math.round(Math.floor(st.rows / 2) + ey * k), ex, ey };
+}
+/** What is on an encounter map, as plain data for other modules: the same plan the picture was drawn from, with no names and no
+    pins. null if the scene isn't an encounter map. Walls and regions on the scene stay the truth for what a GM can edit. */
+export async function readEncounterMap(scene) {
+  if (!game.user.isGM) throw new Error("Only a GM can read an encounter map.");
+  const st = scene?.getFlag(ID, "encounter"); if (!st) return null;
+  const { cx, cy, cols, rows, tune } = st, d = scene.dimensions, hd = game.settings.get(ID, "heading") ?? null, e = entrySquare(st, hd);
+  /* the date stored with the picture, not today's, so the read matches what was drawn */
+  const yearFrac = st.yearFrac ?? calendarNow().yearFrac, plan = planEncounter(await encounterInput(cx, cy, cols, rows), { cx, cy, cols, rows, tune, yearFrac, features: st.features ?? [], cover: st.cover ?? null });
+  return { schema: READ_SCHEMA, rev: st.rev ?? null, cols, rows, sqFt: SQ_FT, pxPerSq: scene.grid.size, originPx: [d.sceneX, d.sceneY],
+    world: { x: cx, y: cy, from: st.from ?? null }, when: { yearFrac, drawnFor: st.drawnFor ?? null },
+    tune: tune ?? null, features: st.features ?? [], notes: st.notes ?? "", unknown: st.unknown ?? [],
+    terrainCodes: { ...TERRAIN }, ...readPlan(plan),
+    entry: { heading: hd, known: !!hd, edge: Math.abs(e.ey) >= Math.abs(e.ex) ? (e.ey > 0 ? "south" : "north") : (e.ex > 0 ? "east" : "west"), square: [e.ci, e.cj] } };
+}
 /* the party's members around the middle of the map, on open squares, in a loose ring */
 /* mode "middle" (ambush: the party in the centre) or "edge" (arriving: on the edge they came in by, from the last heading; south if unknown) */
 async function placeMembers(scene, mode = "middle") {
   const party = partyActor(); if (!party) return 0;
   const st = scene.getFlag(ID, "encounter"), d = scene.dimensions, actors = party.members.filter(a => !scene.tokens.some(t => t.actorId === a.id));
   const blocked = new Set(scene.regions.filter(r => r.getFlag(ID, "enc")).flatMap(r => r.shapes.flatMap(sh => { const out = []; for (let x = sh.x; x < sh.x + sh.width; x += ENC_PX) for (let y = sh.y; y < sh.y + sh.height; y += ENC_PX) out.push(`${x},${y}`); return out; })));
-  let ci = Math.floor(st.cols / 2), cj = Math.floor(st.rows / 2); const spots = [];
-  if (mode === "edge") { const hd = game.settings.get(ID, "heading"); let ex = hd ? -hd.x : 0, ey = hd ? hd.y : 1;   /* scene y runs south; they came from behind their heading */
-    const n = Math.hypot(ex, ey) || 1; ex /= n; ey /= n; const k = Math.min(Math.abs(ex) > 1e-3 ? (st.cols / 2 - 3) / Math.abs(ex) : 1e9, Math.abs(ey) > 1e-3 ? (st.rows / 2 - 3) / Math.abs(ey) : 1e9);
-    ci = Math.round(ci + ex * k); cj = Math.round(cj + ey * k); }
+  /* never on top of a token already there (a monster placed before the party arrives) */
+  const taken = new Set(scene.tokens.flatMap(t => { const out = []; for (let a = 0; a < Math.ceil(t.width); a++) for (let b = 0; b < Math.ceil(t.height); b++) out.push(`${Math.round((t.x - d.sceneX) / ENC_PX) + a},${Math.round((t.y - d.sceneY) / ENC_PX) + b}`); return out; }));
+  const { ci, cj } = mode === "edge" ? entrySquare(st, game.settings.get(ID, "heading")) : { ci: Math.floor(st.cols / 2), cj: Math.floor(st.rows / 2) }, spots = [];
   for (let ring = 0; spots.length < actors.length && ring < 12; ring++) for (let di = -ring; di <= ring; di++) for (let dj = -ring; dj <= ring; dj++) {
     if (Math.max(Math.abs(di), Math.abs(dj)) !== ring || spots.length >= actors.length) continue;
     if (ci + di < 0 || cj + dj < 0 || ci + di >= st.cols || cj + dj >= st.rows) continue;
-    const x = d.sceneX + (ci + di) * ENC_PX, y = d.sceneY + (cj + dj) * ENC_PX; if (!blocked.has(`${x},${y}`) && !spots.some(s => Math.abs(s.x - x) < ENC_PX * 2 && Math.abs(s.y - y) < ENC_PX * 2)) spots.push({ x, y });
+    const x = d.sceneX + (ci + di) * ENC_PX, y = d.sceneY + (cj + dj) * ENC_PX; if (!blocked.has(`${x},${y}`) && !taken.has(`${ci + di},${cj + dj}`) && !spots.some(s => Math.abs(s.x - x) < ENC_PX * 2 && Math.abs(s.y - y) < ENC_PX * 2)) spots.push({ x, y });
   }
   const data = [];
   for (let k = 0; k < actors.length && k < spots.length; k++) { const t = (await actors[k].getTokenDocument({ x: 0, y: 0 })).toObject(); Object.assign(t, spots[k]); data.push(t); }
@@ -1016,7 +1019,7 @@ Hooks.on("getSceneControlButtons", controls => {
     } };
 });
 Hooks.once("ready", () => {
-  game.modules.get(ID).api = { applySheet, exportSheet, createSheet, renderSheet, linkSheets, organizeSheets, placePartyOnNewSheet, createEncounter, drawEncounterScene, addEncounterNotes, extendEncounter, returnFromEncounter, surveyWorldMap, setWorldOrigin, harvestScene, restoreScene, syncExploration, exploredArea, renderMap, world, picked, PPM, CELL };
+  game.modules.get(ID).api = { applySheet, exportSheet, createSheet, renderSheet, linkSheets, organizeSheets, placePartyOnNewSheet, createEncounter, drawEncounterScene, readEncounterMap, addEncounterNotes, extendEncounter, returnFromEncounter, surveyWorldMap, setWorldOrigin, harvestScene, restoreScene, syncExploration, exploredArea, renderMap, world, picked, PPM, CELL };
   /* the active GM quietly keeps the world record up to date from whatever sheet the party is on */
   if (game.user.isGM) setInterval(() => { const s = game.scenes.active; if (s?.getFlag(ID, "state")?.frame && game.users.activeGM?.isSelf) harvestScene(s).catch(() => {}); }, 120000);
 });

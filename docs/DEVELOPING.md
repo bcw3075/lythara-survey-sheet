@@ -10,7 +10,7 @@ How the code works and why it is built this way, for anyone changing it. User-fa
 | `scripts/survey.mjs` | Reads the painted world map into one byte per mile; slices for a sheet | no |
 | `scripts/story.mjs` | Storybook trees for sheets; `speciesAt` (tree species by terrain, wetness, forest age and altitude) | no |
 | `scripts/render.mjs` | `paintGround` and `renderMap` for sheet images | no |
-| `scripts/encounter.mjs` | Encounter maps: `planEncounter` (pure data), `drawEncounter`/`drawReal` (canvas) | no |
+| `scripts/encounter.mjs` | Encounter maps: `planEncounter` (pure data), `squareCosts`, `readPlan` (a plan as plain data), `drawEncounter`/`drawReal` (canvas) | no |
 | `scripts/explore.mjs` | Exploration carry-over between scenes (FogExploration) | yes |
 | `scripts/main.mjs` | Everything Foundry: settings, hooks, sheets, pins, gates, party sync, tools, dialogs, encounter scenes, API | yes |
 | `tools/build-sheet.py` | Copies the shared files into the companion web page between `/*SHARED-BEGIN*/` and `/*SHARED-END*/` | — |
@@ -54,7 +54,19 @@ Picked hexes plus a 3-mile margin, at 150 px per mile, capped near 16,000 px (We
   - Difficult terrain as PF2e `modifyMovementCost` regions with **walk and travel** set. PF2e tokens use travel outside combat.
   - Campfire lights.
   - Darkness follows the world clock (active GM, `updateWorldTime`).
+- **Party placement:** `placeMembers` skips difficult squares, other members' spacing, and any square already holding a token.
 - **Tools:** the left-bar group "Lythara Maps" holds Pick Hexes, Fight Here (centred on the party; places them at the edge they came in by, from `heading`), Encounter Map Here (any spot), Extend, Back to the overland, and the Survey Sheet window. If an encounter map already covers a spot, the dialog offers to reuse it.
+
+## Reading a map from another module
+`api.readEncounterMap(scene)` (GM only; `null` if the scene isn't an encounter map) gives other modules what is on a map as plain data, so nothing outside this module has to know how maps are generated. `readPlan` in `encounter.mjs` does the work and is pure; `tools/test/read.js` checks it on every known spot.
+- **Fields:** `schema` (a reader refuses a number it doesn't know; bump it whenever a field changes meaning), `rev`, `cols`, `rows`, `sqFt`, `pxPerSq`, `originPx`, `world` (`x`, `y`, `from`), `when` (`yearFrac`, `drawnFor`), `tune`, `features`, `notes`, `unknown`, `terrainCodes`, `grids`, `things`, `lines`, `entry`.
+- **`grids`** hold one number per square, row by row (`j * cols + i`): `terrain` (a code from `terrainCodes`), `cost` (0 plain, 1 difficult, 2 greater; the same `squareCosts` the regions are made from), `elev` (feet), and the shares 0..1 of 25 samples `water`, `canopy` (crowns of living trees) and `brush` (undergrowth, or climbing over a fallen tree or big boulder).
+- **`things`** give squares as `at: [i, j]`: `trees` (`trunk`, `kind`, `dead`, and `sight`: `open` no wall, `limited`, `blocks`), `rocks` (2.5 ft and over; `climb` when they count as difficult), `logs`, `fallen`, `stones`, `ruins` (`from`, `to`), `outcrops`, `camps`, `caves`, `placed` (features from the notes where they ended up). `lines` give `kind` and the squares crossed in order. **No line names, line ids or pins**, so nothing named leaves this module this way; `features` and `notes` are the GM's own text from the scene flag.
+- **It uses the stored `yearFrac`, not today's date,** so the read matches the picture. Season changes nothing positional anyway.
+- **`entry`** is the `heading` setting and the edge and square Fight Here would use right now. `heading` is a live world setting, not stored with the map.
+- **It recomputes from the current world data.** If a line or paint near the map changes after the map was drawn, the read shows the new land until the map is redrawn. Walls and regions on the scene stay the truth for anything a GM can edit, so a reader takes those from the documents.
+- **Cost:** about 40 ms for a 40×40 map with no water line near it, about 250 ms with one, about 5 s at 120×120 with a creek and road. Cache it by `rev`.
+- **Hook:** `Hooks.callAll("lythara-survey-sheet.encounterDrawn", scene, { rev, reason })` at the end of every draw, with `reason` `build`, `redraw` or `extend`. It fires only on the client that drew, right after the update that makes clients redraw, so don't create placeables from it (see below). Other clients notice by comparing `rev` in the scene flag.
 
 ## Foundry v14 behaviour the code relies on
 - `updateToken` fires before the token's position changes, and the dragging client sees the old x/y. Use the update's `change`, or the `moveToken` hook's `origin`/`destination`.
@@ -76,7 +88,7 @@ Picked hexes plus a 3-mile margin, at 150 px per mile, capped near 16,000 px (We
 - Avoid per-pixel random texture (it reads as static); build texture from shapes.
 
 ## Testing
-- **Local:** `tools/test/` (see its README) renders encounter maps in headless Chromium from sheet exports kept in the git-ignored `tools/test/data/`. Check every terrain, season, and each slider at both ends, at full view and close up.
+- **Local:** `tools/test/` (see its README) renders encounter maps in headless Chromium from sheet exports kept in the git-ignored `tools/test/data/`. Check every terrain, season, and each slider at both ends, at full view and close up. `node tools/test/read.js` checks the map read on every known spot.
 - **In Foundry, after installing:** use the real buttons and clicks. Check as GM and as a player in a second tab, run an ordinary build as a regression test, and check land parity after land changes.
 
 ## Releasing

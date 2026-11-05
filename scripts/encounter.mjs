@@ -290,6 +290,68 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
   return { cols, rows, Wft, Hft, x0, y1, cx, cy, tune, season, placed: FT, inF, land, terrainAt, coverAt, goingF, goingAt, GOING, elevAt, waterAt, roadAt, W, L, lines, feats };
 }
 
+/* trunk thickness in feet of radius: under THIN no wall; from THIN a wall that gives limited sight; from THICK a wall that blocks sight */
+export const TRUNK_THIN = .75, TRUNK_THICK = 1.6;
+/* each 5-ft square, 25 samples: the share under water and in undergrowth or climbing-over, and the cost:
+   0 plain, 1 difficult (undergrowth or shallow water), 2 greater difficult (deep water: the middle of a river or wide creek; a
+   narrow creek is shallow throughout) */
+function squareRead(plan) {
+  const { cols, rows } = plan, cost = new Uint8Array(cols * rows), water = new Uint8Array(cols * rows), brushN = new Uint8Array(cols * rows), B = plan.feats.brush;
+  /* climbing over: a fallen giant (its whole length) and big boulders */
+  const logs = plan.feats.fallen ?? [], bigRocks = plan.feats.rocks.filter(r => r.big && r.r >= 2.5);
+  const over = (u, v) => logs.some(g => { const ca = Math.cos(g.ang), sa = Math.sin(g.ang), du = u - g.u, dv = v - g.v, al = du * ca + dv * sa, ac = -du * sa + dv * ca; return Math.abs(al) < g.len / 2 && Math.abs(ac) < g.w / 2 + .5; })
+    || bigRocks.some(r => (r.u - u) ** 2 + (r.v - v) ** 2 < r.r * r.r);
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    const near = B.filter(b => Math.abs(b.u - (i * SQ_FT + 2.5)) < b.r + 3 && Math.abs(b.v - (j * SQ_FT + 2.5)) < b.r + 3);
+    let wet = 0, deep = 0, brush = 0;
+    const go = plan.goingAt ? [[1, 1], [3.5, 1], [1, 3.5], [3.5, 3.5], [2.5, 2.5]].reduce((a, [a1, b1]) => a + plan.goingAt(i * SQ_FT + a1, j * SQ_FT + b1).g, 0) / 5 : 0;   /* drifts, mud, scree */
+    for (let a = 0; a < SQ_FT; a++) for (let b = 0; b < SQ_FT; b++) {
+      const u = i * SQ_FT + a + .5, v = j * SQ_FT + b + .5, wa = plan.waterAt(u, v);
+      if (wa > 0) { wet++; if (wa > .7) deep++; } else if (over(u, v) || near.some(q => (q.u - u) ** 2 + (q.v - v) ** 2 < q.r * q.r * .8)) brush++;
+    }
+    const k = j * cols + i; water[k] = wet; brushN[k] = brush;
+    cost[k] = deep >= 20 ? 2 : wet >= 13 || brush + wet >= 12 || go > .5 ? 1 : 0;
+  }
+  return { cost, water, brush: brushN };
+}
+export const squareCosts = plan => squareRead(plan).cost;
+/* a plan as plain data per square, with no names and no pins: grids (one value a square, row by row), things and lines. Pure. */
+export function readPlan(plan) {
+  const { cols, rows, Wft, Hft } = plan, n = cols * rows, sq = (u, v) => [Math.floor(u / SQ_FT), Math.floor(v / SQ_FT)];
+  const inMap = q => q.u >= 0 && q.v >= 0 && q.u < Wft && q.v < Hft, r2 = x => +x.toFixed(2);
+  const { cost, water, brush } = squareRead(plan), terrain = new Array(n), elev = new Array(n);
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) { const w = plan.W(i * SQ_FT + 2.5, j * SQ_FT + 2.5); terrain[j * cols + i] = plan.terrainAt(w.x, w.y); elev[j * cols + i] = Math.round(plan.elevAt(w.x, w.y)); }
+  /* crowns over each square, 25 samples a square. Dead trees have no crown to speak of. */
+  const fine = new Uint8Array(n * 25), fw = cols * 5, fh = rows * 5;
+  for (const t of plan.feats.trees) { if (t.dead) continue; const R = t.R, i0 = Math.max(0, Math.floor(t.u - R)), i1 = Math.min(fw - 1, Math.ceil(t.u + R)), j0 = Math.max(0, Math.floor(t.v - R)), j1 = Math.min(fh - 1, Math.ceil(t.v + R));
+    for (let b = j0; b <= j1; b++) for (let a = i0; a <= i1; a++) if ((a + .5 - t.u) ** 2 + (b + .5 - t.v) ** 2 < R * R) fine[b * fw + a] = 1; }
+  const canopy = new Array(n).fill(0);
+  for (let b = 0; b < fh; b++) for (let a = 0; a < fw; a++) if (fine[b * fw + a]) canopy[Math.floor(b / 5) * cols + Math.floor(a / 5)]++;
+  const share = a => Array.from(a, v => r2(v / 25));
+  const F = plan.feats, at = q => sq(q.u, q.v);
+  /* a line's squares, in order along it, once each */
+  const lines = plan.lines.map(l => { const squares = [], seen = new Set();
+    for (let k = 1; k < l.pts.length; k++) { const a = l.pts[k - 1], b = l.pts[k], m = Math.ceil(Math.hypot(b.u - a.u, b.v - a.v) / 2.5);
+      for (let q = 0; q <= m; q++) { const u = a.u + (b.u - a.u) * q / (m || 1), v = a.v + (b.v - a.v) * q / (m || 1); if (u < 0 || v < 0 || u >= Wft || v >= Hft) continue; const c = sq(u, v), key = c[1] * cols + c[0]; if (!seen.has(key)) { seen.add(key); squares.push(c); } } }
+    return { kind: l.kind, squares }; }).filter(l => l.squares.length);
+  return {
+    grids: { terrain, cost: Array.from(cost), elev, water: share(water), canopy: share(canopy), brush: share(brush) },
+    things: {
+      trees: F.trees.filter(inMap).map(t => ({ at: at(t), trunk: r2(t.trunk), kind: t.kind, dead: !!t.dead, sight: t.trunk < TRUNK_THIN ? "open" : t.trunk >= TRUNK_THICK && !t.dead ? "blocks" : "limited" })),
+      rocks: F.rocks.filter(q => inMap(q) && q.r >= 2.5).map(q => ({ at: at(q), r: r2(q.r), climb: !!q.big })),
+      logs: F.logs.filter(inMap).map(q => ({ at: at(q), len: r2(q.len), ang: r2(q.ang) })),
+      fallen: (F.fallen ?? []).filter(inMap).map(q => ({ at: at(q), len: r2(q.len), ang: r2(q.ang) })),
+      stones: (F.stones ?? []).filter(inMap).map(q => ({ at: at(q), fallen: !!q.fallen, altar: !!q.altar })),
+      ruins: (F.ruins ?? []).filter(q => inMap(q.a) || inMap(q.b)).map(q => ({ from: at(q.a), to: at(q.b) })),
+      outcrops: (F.outcrops ?? []).filter(inMap).map(q => ({ at: at(q), r: r2(q.r) })),
+      camps: (F.camps ?? []).filter(inMap).map(q => ({ at: at(q) })),
+      caves: (F.caves ?? []).filter(inMap).map(q => ({ at: at(q), face: r2(q.face) })),
+      placed: plan.placed.filter(inMap).map(f => ({ kind: f.kind, at: at(f), r: r2(f.r) }))
+    },
+    lines
+  };
+}
+
 function segDist(px, py, a, b) { const dx = b.u - a.u, dy = b.v - a.v, l2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((px - a.u) * dx + (py - a.v) * dy) / l2)); return Math.hypot(px - a.u - t * dx, py - a.v - t * dy); }
 function segBoxDist(a, b, x0, y0, x1, y1) { /* <=0 when the segment touches the box (coarse) */
   const minx = Math.min(a.u, b.u), maxx = Math.max(a.u, b.u), miny = Math.min(a.v, b.v), maxy = Math.max(a.v, b.v);
