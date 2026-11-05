@@ -593,7 +593,7 @@ class SheetPanel extends foundry.applications.api.ApplicationV2 {
           <button type="button" data-do="survey" ${here?.grid?.type >= 2 && !isSheet && w.origin ? "" : "disabled"}>Survey this map</button>
         </div>
         <p>${isMap ? "Pick hexes with the Pick Hexes tool, then:" : "Open the World Map to pick hexes."}</p>
-        <div class="lss-row"><input type="text" id="lss-name" placeholder="Region name, e.g. Redthorn Hills" ${isMap ? "" : "disabled"}><button type="button" data-do="make" ${isMap ? "" : "disabled"}>Make a sheet from ${picked.size} picked hex${picked.size === 1 ? "" : "es"}</button></div>
+        <div class="lss-row"><input type="text" id="lss-name" placeholder="Region name, e.g. North Hills" ${isMap ? "" : "disabled"}><button type="button" data-do="make" ${isMap ? "" : "disabled"}>Make a sheet from ${picked.size} picked hex${picked.size === 1 ? "" : "es"}</button></div>
       </section>
       <section><h3>Encounter maps</h3>
         <p>To plan one ahead, pick the Encounter Map Here tool (the chessboard, in the Lythara Maps group of the left-hand bar) and click a spot on any sheet or the World Map. Or make one where the party is now:</p>
