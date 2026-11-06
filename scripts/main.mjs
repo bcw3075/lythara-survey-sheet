@@ -950,7 +950,7 @@ async function placeMembers(scene, mode = "middle") {
   const st = scene.getFlag(ID, "encounter"), d = scene.dimensions, actors = party.members.filter(a => !scene.tokens.some(t => t.actorId === a.id));
   const blocked = new Set(scene.regions.filter(r => r.getFlag(ID, "enc")).flatMap(r => r.shapes.flatMap(sh => { const out = []; for (let x = sh.x; x < sh.x + sh.width; x += ENC_PX) for (let y = sh.y; y < sh.y + sh.height; y += ENC_PX) out.push(`${x},${y}`); return out; })));
   /* never on top of a token already there (a monster placed before the party arrives) */
-  const taken = new Set(scene.tokens.flatMap(t => { const out = []; for (let a = 0; a < Math.ceil(t.width); a++) for (let b = 0; b < Math.ceil(t.height); b++) out.push(`${Math.round((t.x - d.sceneX) / ENC_PX) + a},${Math.round((t.y - d.sceneY) / ENC_PX) + b}`); return out; }));
+  const taken = new Set(scene.tokens.contents.flatMap(t => { const out = []; for (let a = 0; a < Math.ceil(t.width); a++) for (let b = 0; b < Math.ceil(t.height); b++) out.push(`${Math.round((t.x - d.sceneX) / ENC_PX) + a},${Math.round((t.y - d.sceneY) / ENC_PX) + b}`); return out; }));
   const { ci, cj } = mode === "edge" ? entrySquare(st, game.settings.get(ID, "heading")) : { ci: Math.floor(st.cols / 2), cj: Math.floor(st.rows / 2) }, spots = [];
   for (let ring = 0; spots.length < actors.length && ring < 12; ring++) for (let di = -ring; di <= ring; di++) for (let dj = -ring; dj <= ring; dj++) {
     if (Math.max(Math.abs(di), Math.abs(dj)) !== ring || spots.length >= actors.length) continue;

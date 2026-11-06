@@ -2,7 +2,7 @@
   "id": "lythara-survey-sheet",
   "title": "Lythara Survey Sheet",
   "description": "Surveys the painted World Map once, then builds detailed overland scenes for any hexes you pick: land generated from world position, places as map notes, and sheet data that can be copied out and pasted back.",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "compatibility": {
     "minimum": "14",
     "verified": "14.370"
