@@ -292,6 +292,10 @@ export function planEncounter(data, { cx, cy, cols = 40, rows = 40, tune, yearFr
 
 /* trunk thickness in feet of radius: under THIN no wall; from THIN a wall that gives limited sight; from THICK a wall that blocks sight */
 export const TRUNK_THIN = .75, TRUNK_THICK = 1.6;
+/* Rhea, 2026-11-06: a trunk 3 ft across or more is something to hide behind, so standard cover; anything thinner is lesser cover at most.
+   Under THIN there's no wall, so no cover. Visioner's own reckoning from the walls gave greater cover behind most trunks. */
+export const TRUNK_COVER = 1.5;
+export const trunkCover = trunk => trunk < TRUNK_THIN ? "none" : trunk >= TRUNK_COVER ? "standard" : "lesser";
 /* each 5-ft square, 25 samples: the share under water and in undergrowth or climbing-over, and the cost:
    0 plain, 1 difficult (undergrowth or shallow water), 2 greater difficult (deep water: the middle of a river or wide creek; a
    narrow creek is shallow throughout) */
@@ -337,7 +341,7 @@ export function readPlan(plan) {
   return {
     grids: { terrain, cost: Array.from(cost), elev, water: share(water), canopy: share(canopy), brush: share(brush) },
     things: {
-      trees: F.trees.filter(inMap).map(t => ({ at: at(t), trunk: r2(t.trunk), kind: t.kind, dead: !!t.dead, sight: t.trunk < TRUNK_THIN ? "open" : t.trunk >= TRUNK_THICK && !t.dead ? "blocks" : "limited" })),
+      trees: F.trees.filter(inMap).map(t => ({ at: at(t), trunk: r2(t.trunk), kind: t.kind, dead: !!t.dead, sight: t.trunk < TRUNK_THIN ? "open" : t.trunk >= TRUNK_THICK && !t.dead ? "blocks" : "limited", cover: trunkCover(t.trunk) })),
       rocks: F.rocks.filter(q => inMap(q) && q.r >= 2.5).map(q => ({ at: at(q), r: r2(q.r), climb: !!q.big })),
       logs: F.logs.filter(inMap).map(q => ({ at: at(q), len: r2(q.len), ang: r2(q.ang) })),
       fallen: (F.fallen ?? []).filter(inMap).map(q => ({ at: at(q), len: r2(q.len), ang: r2(q.ang) })),

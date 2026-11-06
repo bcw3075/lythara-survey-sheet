@@ -2,7 +2,7 @@ import { PPM, renderMap } from "./render.mjs";
 import { CELL, lineCourse, T as TERRAIN } from "./land.mjs";
 import { classifyImage, surveyToPng, surveyFromPng, surveySlice, SURVEY_FILE, SURVEY_VERSION } from "./survey.mjs";
 import { harvestScene, restoreScene, growExplored, syncExploration, exploredArea } from "./explore.mjs";
-import { planEncounter, drawEncounter, parseNotes, squareCosts, readPlan, TRUNK_THIN, TRUNK_THICK, FT_PER_MI, SQ_FT } from "./encounter.mjs";
+import { planEncounter, drawEncounter, parseNotes, squareCosts, readPlan, TRUNK_THIN, TRUNK_THICK, trunkCover, FT_PER_MI, SQ_FT } from "./encounter.mjs";
 
 const ID = "lythara-survey-sheet";
 const IMAGE_DIR = "assets/map-tools";
@@ -787,12 +787,14 @@ async function drawEncounterScene(scene, { grow = null, reason = "redraw" } = {}
   /* trunks, graded by thickness. Thin (under TRUNK_THIN ft radius): nothing. Medium: blocks movement, and sight "limited":
      you can see past one such tree but not past two in a row. Thick (TRUNK_THICK ft and over): blocks movement and sight.
      Each trunk is a one-way ring (dir LEFT, vertices clockwise on screen): it stops tokens walking in, and a sight line through
-     it counts as one wall, not two (checked on 14.369: behind one medium trunk visible, behind two hidden). */
-  const walls = [], WS = CONST.EDGE_SENSE_TYPES, LEFT = CONST.EDGE_DIRECTIONS.LEFT;
+     it counts as one wall, not two (checked on 14.369: behind one medium trunk visible, behind two hidden).
+     Cover is set on the wall (trunkCover), because Visioner's own reckoning gives greater cover behind most trunks. Its override takes the line from
+     the attacker's centre to the target's; a line that misses the ring falls back to Visioner's sampling. */
+  const walls = [], WS = CONST.EDGE_SENSE_TYPES, LEFT = CONST.EDGE_DIRECTIONS.LEFT, VISIONER = game.modules.get("pf2e-visioner")?.active;
   for (const t of plan.feats.trees) { if (t.trunk < TRUNK_THIN || t.u < 0 || t.v < 0 || t.u > plan.Wft || t.v > plan.Hft) continue;
     const sense = t.trunk >= TRUNK_THICK && !t.dead ? WS.NORMAL : WS.LIMITED;
     const x = ox + t.u * ppf, y = oy + t.v * ppf, r = t.trunk * ppf, pts = [...Array(6)].map((_, k) => [Math.round(x + Math.cos(k * Math.PI / 3) * r), Math.round(y + Math.sin(k * Math.PI / 3) * r)]);
-    for (let k = 0; k < 6; k++) walls.push({ c: [...pts[k], ...pts[(k + 1) % 6]], move: CONST.WALL_MOVEMENT_TYPES.NORMAL, sight: sense, light: sense, sound: WS.NONE, dir: LEFT, flags: { [ID]: { enc: "trunk" } } }); }
+    for (let k = 0; k < 6; k++) walls.push({ c: [...pts[k], ...pts[(k + 1) % 6]], move: CONST.WALL_MOVEMENT_TYPES.NORMAL, sight: sense, light: sense, sound: WS.NONE, dir: LEFT, flags: { [ID]: { enc: "trunk" }, ...(VISIONER ? { "pf2e-visioner": { coverOverride: trunkCover(t.trunk) } } : {}) } }); }
   /* placed features: stones, ruined walls, outcrops and the cave's rock block movement and sight */
   const P = (u, v) => [Math.round(ox + u * ppf), Math.round(oy + v * ppf)], fw = (a, b, sense = WS.NORMAL) => walls.push({ c: [...a, ...b], move: CONST.WALL_MOVEMENT_TYPES.NORMAL, sight: sense, light: sense, sound: WS.NONE, flags: { [ID]: { enc: "feature" } } });
   const ringW = (u, v, r, n, sense) => { const pts = [...Array(n)].map((_, k) => P(u + Math.cos(k / n * 6.283) * r, v + Math.sin(k / n * 6.283) * r)); for (let k = 0; k < n; k++) walls.push({ c: [...pts[k], ...pts[(k + 1) % n]], move: CONST.WALL_MOVEMENT_TYPES.NORMAL, sight: sense, light: sense, sound: WS.NONE, dir: LEFT, flags: { [ID]: { enc: "feature" } } }); };
